@@ -126,6 +126,11 @@ consider_namespace_packages = true
 ## Development
 
 ```bash
-uv sync
-uv run pytest          # unit suite; no live `claude -p` calls
+make test        # fast unit suite (no live `claude -p` calls)
+make test-all    # every test, including live evals (needs `claude` on PATH)
+make help        # list all targets
 ```
+
+`make` wraps `uv`; a fresh checkout needs only `make test`. Override pytest
+args with `ARGS`, e.g. `make test ARGS="-k grading"`. The equivalent without
+make is `uv sync && uv run pytest -m 'not live_eval'`.
