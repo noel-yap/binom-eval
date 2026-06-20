@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "binom-eval"
+version = "0.1.0"
+description = "Bayesian (Beta-binomial) grading for AI skill / agent evals run via `claude -p`."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Noel Yap", email = "noel.yap@qad.com" }]
+keywords = ["evals", "bayesian", "beta-binomial", "claude", "agents", "skills", "pytest"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
+]
+# pytest is a runtime dependency: `binom_eval.plugin` imports it at module
+# load and the package registers a pytest plugin.
+dependencies = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/noelyap/binom-eval"
+Repository = "https://github.com/noelyap/binom-eval"
+
+# Installing the package registers the pytest plugin, so the
+# `--live-eval-max-trials` / `--live-eval-target-rate` options and the
+# `live_eval` marker (plus the `live_eval_target_rate` fixture) become
+# available to any consuming test suite with no conftest sys.path wiring.
+[project.entry-points.pytest11]
+binom_eval = "binom_eval.plugin"
+
+[dependency-groups]
+dev = ["pytest>=7.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/binom_eval"]
+
+[tool.pytest.ini_options]
+# A bare `pytest` runs only the fast unit suite. The `live_eval` marker is
+# registered by the plugin; exclude live (real `claude -p`) runs anywhere
+# with `-m 'not live_eval'`.
+testpaths = ["tests"]
+# importlib mode + namespace packages let several eval dirs be collected in
+# one session: each `evals/` dir has no `__init__.py`, so pytest names its
+# modules by full path and the per-suite `_assertions` / `_helpers` (imported
+# relatively, `from ._assertions import ...`) are namespaced per skill instead
+# of colliding on a bare key in `sys.modules`. This is the recommended config
+# for any repo that collects binom-eval suites; the bundled `examples/` needs
+# it too. See https://docs.pytest.org/en/stable/explanation/pythonpath.html
+addopts = "--import-mode=importlib"
+consider_namespace_packages = true

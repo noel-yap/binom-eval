@@ -1,0 +1,27 @@
+{
+  "evals": [
+    {
+      "id": "triggers-on-target-task",
+      "should_trigger": true,
+      "prompt": "Use the example-skill to do the thing it is for, and show the result in a fenced code block.",
+      "expected_output": "Claude invokes example-skill and returns a fenced code block containing the expected marker.",
+      "assertions": [
+        {
+          "id": "emits-code-block",
+          "description": "The assistant output contains at least one fenced code block."
+        },
+        {
+          "id": "code-block-has-marker",
+          "description": "Some fenced code block contains the expected marker token."
+        }
+      ]
+    },
+    {
+      "id": "stays-quiet-off-target",
+      "should_trigger": false,
+      "prompt": "Just say hello. Do not use any skill.",
+      "expected_output": "Claude answers directly without invoking example-skill.",
+      "assertions": []
+    }
+  ]
+}
