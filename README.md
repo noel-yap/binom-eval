@@ -36,13 +36,67 @@ Evals are non-deterministic by design and are **never cached**: every trial is
 a fresh live `claude -p` call, so the suite measures the model's run-to-run
 variance. Deterministic checks belong in an ordinary unit suite.
 
+## Why these defaults
+
+The defaults are tuned for the expected workload: **most eval runs are of
+working skills in CI** (a broken skill gets fixed fast, so it's rarely the
+thing under test). That makes the dominant failure mode a *false red* — a
+working skill that the build rejects by chance — so the parameters are chosen
+to keep that rare while still catching real regressions. The numbers below are
+from Monte-Carlo simulation of the adaptive loop (budget 21, prior
+`Beta(1, 1)`); "false-FAIL" is a good skill wrongly failed, "caught" is a
+broken skill correctly failed.
+
+- **`TARGET_RATE = 3/5`.** The bar must sit *below* where good skills actually
+  live (~0.9+), because asking the posterior to distinguish 0.90 from a bar
+  near it is both expensive and flaky. At 3/5 a true-0.90 skill false-fails
+  only ~0.2% of the time (true-0.80: ~3%), while clearly-broken skills are
+  still caught reliably (true-0.40 ~91%, true-0.30 ~100%). This deliberately
+  favours **never red-flagging a working skill** over catching *mildly*-broken
+  ones: a true-0.60 skill is caught only ~46% (vs ~79% at a 2/3 bar), on the
+  assumption that real regressions crater well below 0.6 and get fixed fast.
+  Raise the bar toward 2/3 if catching mild breakage matters more than CI
+  quiet. "Passes at least three of every five attempts" is an easy bar to
+  explain, and 0.6 sits just under the golden ratio (~0.618) that the
+  Fibonacci-ratio candidates we compared converge to.
+- **Band `(e^-2, 1 - e^-2)` ≈ (0.135, 0.865).** Symmetric about ½, so an early
+  unlucky streak is as hard to lock a FAIL on as a lucky one is to lock a PASS.
+  `e^-2` is a natural "two-units-of-evidence" tail. Raising the low edge (e.g.
+  to 0.5, a FAIL-eager asymmetric band) was measured to ~10× the false-FAIL
+  rate on good skills — rejected.
+- **`BATCH_FLOOR = 3`.** Not just a concurrency knob — it's a *stability* knob.
+  Flooring the opening salvo at 3 forces a representative sample before the
+  posterior may commit, which cut false-FAIL ~3× versus a floor of 1 (e.g.
+  12% → 4% at target 0.7, true 0.9) for ~2 extra trials. A floor of 2 was
+  strictly worse (same cost, less benefit, and it could *raise* round counts);
+  5 bought marginal speed at near-max trial cost. 3 is the sweet spot.
+- **`MAX_TRIALS = 21`.** A ceiling, not a target: good skills lock in ~2–3
+  rounds (~6–9 trials) and never approach it. It only bites for a skill
+  sitting *exactly* at the bar, which is genuinely undecidable — one more
+  trial can't rescue it. 21 = 3 × 7 divides evenly by `BATCH_FLOOR`, so the
+  worst case is a clean seven rounds of three with no ragged final batch. The
+  budget is the least sensitive parameter here (20 vs 21 was within noise).
+- **Prior `Beta(1, 1)` (uniform).** No prior opinion on a skill's pass rate —
+  the verdict is driven by the trials, not by a thumb on the scale. Raise
+  `PRIOR_ALPHA` for an optimistic prior ("skills usually work, demand less
+  evidence") or `PRIOR_BETA` for a skeptical one.
+- **Budget tiebreak at `p_good >= 0.5`.** If a run exhausts the budget still
+  inside the band, it's graded toward whichever side holds the majority of the
+  posterior. This only matters for at-the-bar skills (everything else locks via
+  the band first); 0.5 is the principled midpoint.
+
+`TARGET_RATE` and `MAX_TRIALS` are per-run overridable from the CLI
+(`--live-eval-target-rate`, `--live-eval-max-trials`); the band, floor, prior,
+and tiebreak are module constants in `binom_eval.grading` — change them there
+if the workload assumptions shift.
+
 ## Install
 
 Not on PyPI yet — install from Git:
 
 ```bash
-uv add "binom-eval @ git+https://github.com/noelyap/binom-eval"
-# or: pip install "git+https://github.com/noelyap/binom-eval"
+uv add "binom-eval @ git+https://github.com/noel-yap/binom-eval"
+# or: pip install "git+https://github.com/noel-yap/binom-eval"
 # pin a release: ...binom-eval.git@v0.1.0
 ```
 
