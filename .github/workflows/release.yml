@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    # Release on annotated version tags, e.g. `v0.1.0`.
+    tags: ["v*"]
+
+# Least-privilege by default; the `github-release` job elevates to
+# `contents: write` so `softprops/action-gh-release` can create the Release.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Build distributions
+        run: uv build
+
+      # Fail early if the tag (e.g. v0.1.0) doesn't match the version in
+      # pyproject.toml — keeps the Git tag and the artifact in lock-step.
+      # Also classify PEP 440 pre-release versions (e.g. 0.1.0rc1, 0.1.0a1)
+      # off the normalized version so the GitHub Release is flagged correctly.
+      - name: Verify tag and classify version
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(uv version --short)"
+          if [ "${tag}" != "${pkg}" ]; then
+            echo "::error::tag v${tag} != pyproject version ${pkg}" >&2
+            exit 1
+          fi
+          if [[ "${pkg}" =~ (a|b|rc|alpha|beta|dev|pre) ]]; then
+            echo "prerelease=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "prerelease=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  github-release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ needs.build.outputs.prerelease == 'true' }}

@@ -38,8 +38,12 @@ variance. Deterministic checks belong in an ordinary unit suite.
 
 ## Install
 
+Not on PyPI yet — install from Git:
+
 ```bash
-uv add binom-eval        # or: pip install binom-eval
+uv add "binom-eval @ git+https://github.com/noelyap/binom-eval"
+# or: pip install "git+https://github.com/noelyap/binom-eval"
+# pin a release: ...binom-eval.git@v0.1.0
 ```
 
 Installing registers a pytest plugin, so the `--live-eval-max-trials` /
