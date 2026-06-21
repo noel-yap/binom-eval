@@ -26,8 +26,8 @@ classifiers = [
 dependencies = ["pytest>=7.0"]
 
 [project.urls]
-Homepage = "https://github.com/noelyap/binom-eval"
-Repository = "https://github.com/noelyap/binom-eval"
+Homepage = "https://github.com/noel-yap/binom-eval"
+Repository = "https://github.com/noel-yap/binom-eval"
 
 # Installing the package registers the pytest plugin, so the
 # `--live-eval-max-trials` / `--live-eval-target-rate` options and the
