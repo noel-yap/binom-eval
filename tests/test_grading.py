@@ -406,7 +406,13 @@ class TestRunEvalAdaptive:
         state = {"i": 0}
 
         def fake_batch(
-            item: dict, repo_root: Path, skill_name: str, count: int
+            item: dict,
+            repo_root: Path,
+            skill_name: str,
+            count: int,
+            *,
+            gate: object = None,
+            isolate: bool = False,
         ) -> list[EvalRun]:
             chunk = scripted[state["i"] : state["i"] + count]
             state["i"] += count
@@ -431,7 +437,13 @@ class TestRunEvalAdaptive:
     ) -> None:
         # A skill that always misses: the opening floor of 3 FAIL-locks it.
         def fake_batch(
-            item: dict, repo_root: Path, skill_name: str, count: int
+            item: dict,
+            repo_root: Path,
+            skill_name: str,
+            count: int,
+            *,
+            gate: object = None,
+            isolate: bool = False,
         ) -> list[EvalRun]:
             return _runs(*([False] * count))
 

@@ -65,10 +65,18 @@ class TestDefaults:
 class _StubConfig:
     """Stands in for `pytest.Config`, answering `getoption` from a dict."""
 
-    def __init__(self, max_trials: int, target: float) -> None:
+    def __init__(
+        self,
+        max_trials: int,
+        target: float,
+        concurrency: int = 4,
+        isolate: bool = False,
+    ) -> None:
         self._options = {
             "--live-eval-max-trials": max_trials,
             "--live-eval-target-rate": target,
+            "--live-eval-concurrency": concurrency,
+            "--live-eval-isolate": isolate,
         }
 
     def getoption(self, name: str) -> Any:
@@ -121,6 +129,9 @@ class TestMakeEvalRunsFixture:
             max_trials: int,
             target: float,
             checks: list[Any],
+            *,
+            gate: Any = None,
+            isolate: bool = False,
         ) -> list[str]:
             calls.append((item["id"], max_trials, target))
             return [f"run:{item['id']}"]
@@ -130,5 +141,7 @@ class TestMakeEvalRunsFixture:
         result = self._fixture_fn()(_StubConfig(21, 2.0 / 3.0))
 
         assert result == {"e1": ["run:e1"], "e2": ["run:e2"]}
-        assert [eval_id for eval_id, *_ in calls] == ["e1", "e2"]
-        assert calls[0][1:] == (21, 2.0 / 3.0)
+        # Evals are driven through a thread pool, so the recorded order is not
+        # guaranteed; assert on the set of ids and the shared params instead.
+        assert {eval_id for eval_id, *_ in calls} == {"e1", "e2"}
+        assert all(tuple(rest) == (21, 2.0 / 3.0) for _, *rest in calls)

@@ -11,7 +11,9 @@ by the Beta-binomial verdict in `binom_eval.grading`.
 from __future__ import annotations
 
 import shutil
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,17 @@ from binom_eval.stream_json import EvalRun
 # the target rate, which are genuinely undecidable. 21 = 3 * 7 divides evenly
 # by BATCH_FLOOR, so the worst case is a clean seven rounds of three.
 DEFAULT_MAX_TRIALS = 21
+
+# How many `claude -p` runs may be in flight at once across the whole session.
+# Evals are driven in parallel and each fans its trials out too, so this single
+# ceiling -- enforced by one shared semaphore threaded through every run --
+# bounds total live calls regardless of suite size, keeping local load and API
+# rate pressure in check. Sitting just above `BATCH_FLOOR` (3), it leaves room
+# for a second eval to keep the gate warm through another's re-grading gap
+# rather than letting one eval's opening batch monopolize it. Raise it to
+# finish faster when the API and machine can take it; drop it to 1 to run
+# fully serially.
+DEFAULT_CONCURRENCY = 5
 
 # The true pass rate a good skill should clear. The verdict asks how much
 # posterior mass sits at or above this. 3/5 ("passes at least three of every
@@ -69,6 +82,28 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             % (PASS_THRESHOLD, 1.0 - PASS_THRESHOLD, DEFAULT_TARGET_RATE)
         ),
     )
+    parser.addoption(
+        "--live-eval-concurrency",
+        action="store",
+        type=int,
+        default=DEFAULT_CONCURRENCY,
+        help=(
+            "Maximum `claude -p` runs in flight at once across the whole "
+            "session, shared by parallel evals and their trial batches alike. "
+            f"Default {DEFAULT_CONCURRENCY}; set to 1 to run fully serially."
+        ),
+    )
+    parser.addoption(
+        "--live-eval-isolate",
+        action="store_true",
+        default=False,
+        help=(
+            "Run each `claude -p` trial in a throwaway copy of the skill's "
+            "repo root instead of the shared tree. Needed for skills that "
+            "write to the working tree so concurrent runs cannot clobber each "
+            "other; off by default since it copies the tree per run."
+        ),
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -92,30 +127,47 @@ def make_eval_runs_fixture(
 
     Per-skill conftest.py binds the returned fixture to the name
     `eval_runs` so per-skill `test_evals.py` can request it directly. The
-    value is a list of `EvalRun` per eval (one per trial run): trials run
-    in adaptive concurrent batches that stop as soon as the Beta-binomial
-    verdict locks, decided from `assertion_handlers` (plus the skill-trigger
-    check). Every run is a fresh live call; results are never cached.
+    value is a list of `EvalRun` per eval (one per trial run). The evals are
+    driven in parallel and each runs its trials in adaptive concurrent batches
+    that stop as soon as the Beta-binomial verdict locks, decided from
+    `assertion_handlers` (plus the skill-trigger check). A single shared
+    semaphore (`--live-eval-concurrency`) caps total live calls across all of
+    this; `--live-eval-isolate` runs each trial in a throwaway copy of
+    `repo_root` for skills that write to the tree. Every run is a fresh live
+    call; results are never cached.
     """
 
     @pytest.fixture(scope="session")
     def eval_runs(pytestconfig: pytest.Config) -> dict[str, list[EvalRun]]:
-        pytest.skip("claude CLI not found on PATH") if shutil.which(
-            "claude"
-        ) is None else None
+        if shutil.which("claude") is None:
+            pytest.skip("claude CLI not found on PATH")
         max_trials = pytestconfig.getoption("--live-eval-max-trials")
         target = pytestconfig.getoption("--live-eval-target-rate")
+        concurrency = pytestconfig.getoption("--live-eval-concurrency")
+        isolate = pytestconfig.getoption("--live-eval-isolate")
+        gate = threading.Semaphore(concurrency)
+        evals = load_evals(evals_path, assertion_handlers)
 
         def build(item: dict[str, Any]) -> list[EvalRun]:
             checks = _eval_checks(item, assertion_handlers)
             return run_eval_adaptive(
-                item, repo_root, skill_name, max_trials, target, checks
+                item,
+                repo_root,
+                skill_name,
+                max_trials,
+                target,
+                checks,
+                gate=gate,
+                isolate=isolate,
             )
 
-        return {
-            item["id"]: build(item)
-            for item in load_evals(evals_path, assertion_handlers)
-        }
+        # Drive the evals concurrently; the shared `gate` -- not the worker
+        # count -- bounds real load, so a few workers per gate slot is plenty
+        # to keep it saturated without spawning a thread per eval.
+        workers = max(1, min(len(evals), 4 * concurrency))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            runs = list(pool.map(build, evals))
+        return {item["id"]: run for item, run in zip(evals, runs)}
 
     return eval_runs
 

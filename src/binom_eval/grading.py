@@ -34,6 +34,7 @@ from __future__ import annotations
 import enum
 import json
 import math
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -301,6 +302,9 @@ def run_eval_adaptive(
     max_trials: int,
     target: float,
     checks: list[Callable[[EvalRun], None]],
+    *,
+    gate: threading.Semaphore | None = None,
+    isolate: bool = False,
 ) -> list[EvalRun]:
     """Run trials in optimistic concurrent batches, stopping once the verdict
     is fixed.
@@ -310,11 +314,27 @@ def run_eval_adaptive(
     FAIL, or the `max_trials` budget is spent. This caps cost at `max_trials`
     runs and spends as few as `BATCH_FLOOR` when a clean streak settles every
     check, over however many rounds the outcomes require.
+
+    `gate` and `isolate` are forwarded to `run_claude_batch`: the shared
+    semaphore caps total live calls across this eval's batches and any other
+    evals driven in parallel, and `isolate` runs every trial in its own
+    throwaway copy of `repo_root`. Batches within one eval still run as
+    sequential rounds (each round's verdict decides the next), so concurrency
+    comes from the trials in a round plus evals overlapping above this layer.
     """
     runs: list[EvalRun] = []
     batch = next_batch_size(runs, checks, max_trials, target)
     while batch > 0:
-        runs.extend(run_claude_batch(item, repo_root, skill_name, batch))
+        runs.extend(
+            run_claude_batch(
+                item,
+                repo_root,
+                skill_name,
+                batch,
+                gate=gate,
+                isolate=isolate,
+            )
+        )
         batch = next_batch_size(runs, checks, max_trials, target)
     return runs
 

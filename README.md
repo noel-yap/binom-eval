@@ -31,6 +31,23 @@ much of it clears a target rate.
   posterior is re-graded. Sampling stops as soon as every check locks PASS or
   any check locks FAIL — capping cost at `--live-eval-max-trials` (default 21)
   while usually spending far fewer.
+- **Concurrency:** the evals in a suite are driven in parallel, and each fans
+  its trial batches out too. A single shared semaphore
+  (`--live-eval-concurrency`, default 5) caps total in-flight `claude -p` calls
+  across the whole session, so load and API-rate pressure stay bounded no
+  matter how large the suite; set it to `1` to run fully serially. Skills that
+  **write** to the working tree need `--live-eval-isolate`, which runs each
+  trial in a throwaway copy of the repo root so concurrent runs can't clobber
+  one another. The shared semaphore lives **inside one process**, so running
+  under [pytest-xdist](https://pytest-xdist.readthedocs.io) (`-n N`) gives each
+  of the `N` workers its own gate — total in-flight calls become
+  `N × --live-eval-concurrency`, and because the eval fixture is
+  session-scoped, every worker recomputes the *whole* suite. The built-in
+  parallelism already saturates the gate, so the simplest answer is to **not
+  pass `-n`** for the eval run. If you must shard across workers anyway, use
+  `--dist loadgroup` (or `loadscope`) to keep a skill's eval tests on a single
+  worker, and divide `--live-eval-concurrency` by the worker count to hold the
+  global ceiling.
 
 Evals are non-deterministic by design and are **never cached**: every trial is
 a fresh live `claude -p` call, so the suite measures the model's run-to-run
@@ -100,10 +117,11 @@ uv add "binom-eval @ git+https://github.com/noel-yap/binom-eval"
 # pin a release: ...binom-eval.git@v0.1.0
 ```
 
-Installing registers a pytest plugin, so the `--live-eval-max-trials` /
-`--live-eval-target-rate` options and the `live_eval` marker become available
-to your test suite with no extra wiring. Live evals require the `claude` CLI
-on `PATH`; when it's absent the fixture skips rather than fails.
+Installing registers a pytest plugin, so the `--live-eval-max-trials`,
+`--live-eval-target-rate`, `--live-eval-concurrency`, and
+`--live-eval-isolate` options and the `live_eval` marker become available to
+your test suite with no extra wiring. Live evals require the `claude` CLI on
+`PATH`; when it's absent the fixture skips rather than fails.
 
 ## Usage
 
@@ -146,6 +164,9 @@ pytest path/to/evals -m live_eval
 # demand a higher true rate over a smaller budget:
 pytest path/to/evals -m live_eval \
     --live-eval-target-rate 0.8 --live-eval-max-trials 12
+# run more trials at once; isolate runs for a skill that writes to the tree:
+pytest path/to/evals -m live_eval \
+    --live-eval-concurrency 8 --live-eval-isolate
 ```
 
 See [`examples/`](examples/) for the full consumer pattern, including

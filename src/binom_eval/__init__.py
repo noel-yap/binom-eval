@@ -13,8 +13,9 @@ only as many trials as the verdict needs. The package is split by concern:
     checks).
   * `stream_json` -- the `EvalRun` dataclass and `parse_stream_json`, which
     turn one `claude -p` run's stdout into an `EvalRun`.
-  * `runner` -- the subprocess/env layer: `run_claude` and the concurrent
-    `run_claude_batch`.
+  * `runner` -- the subprocess/env layer: `run_claude`, the concurrent
+    `run_claude_batch` (throttled by a shared semaphore), and
+    `isolated_workdir` for per-run filesystem isolation.
   * `grading` -- the Beta-binomial verdict (`posterior_pass_prob`,
     `eval_passed`), the adaptive trial driver (`next_batch_size`,
     `run_eval_adaptive`), and the rollups used to grade a batch.
@@ -59,6 +60,7 @@ from binom_eval.grading import (
     trigger_pass_counts,
 )
 from binom_eval.plugin import (
+    DEFAULT_CONCURRENCY,
     DEFAULT_MAX_TRIALS,
     DEFAULT_TARGET_RATE,
     live_eval_target_rate,
@@ -68,7 +70,9 @@ from binom_eval.plugin import (
 )
 from binom_eval.runner import (
     DEFAULT_TIMEOUT_SECONDS,
+    ISOLATION_IGNORE,
     NESTED_SESSION_MARKERS,
+    isolated_workdir,
     run_claude,
     run_claude_batch,
     stripped_env,
@@ -106,7 +110,9 @@ __all__ = [
     "parse_stream_json",
     # runner
     "DEFAULT_TIMEOUT_SECONDS",
+    "ISOLATION_IGNORE",
     "NESTED_SESSION_MARKERS",
+    "isolated_workdir",
     "run_claude",
     "run_claude_batch",
     "stripped_env",
@@ -127,6 +133,7 @@ __all__ = [
     "trial_outcomes",
     "trigger_pass_counts",
     # plugin
+    "DEFAULT_CONCURRENCY",
     "DEFAULT_MAX_TRIALS",
     "DEFAULT_TARGET_RATE",
     "live_eval_target_rate",
