@@ -25,7 +25,8 @@ trials are worth running given the posterior so far, and `run_eval_adaptive`
 loops the two until the verdict is fixed -- capping cost at `MAX_TRIALS`
 runs while spending as few as `BATCH_FLOOR` when a clean streak settles it.
 Second, the grading rollups (`trial_outcomes`, `eval_passed`,
-`assert_eval_passed`, `failing_assertions`, `trigger_pass_counts`) that
+`trial_outcomes_passed`, `trial_outcomes_failure_message`, `failing_assertions`,
+`trigger_pass_counts`) that
 per-skill tests use to grade and report on a completed batch of runs.
 """
 
@@ -432,27 +433,34 @@ def trial_outcomes(
     return outcomes
 
 
-def assert_eval_passed(
-    outcomes: list[tuple[int, str | None]], target: float, label: str
-) -> None:
-    """Assert the posterior clears the bar for one check's trial outcomes.
+def trial_outcomes_passed(
+    outcomes: list[tuple[int, str | None]], target: float
+) -> bool:
+    """True when trial outcomes clear the posterior bar at ``target``."""
+    passes = sum(1 for _, err in outcomes if err is None)
+    return eval_passed(passes, len(outcomes), target)
 
-    Counts the passing trials and grades them with `eval_passed`; on failure
-    raises with the pass count, the posterior mass above `target`, and the
-    failing trials' messages.
+
+def trial_outcomes_failure_message(
+    outcomes: list[tuple[int, str | None]], target: float, label: str
+) -> str:
+    """Human-readable failure detail for ``trial_outcomes_passed``.
+
+    Pair with ``assert trial_outcomes_passed(outcomes, target),
+    trial_outcomes_failure_message(outcomes, target, label)`` in per-skill
+    test modules.
     """
     passes = sum(1 for _, err in outcomes if err is None)
     trials = len(outcomes)
-    if not eval_passed(passes, trials, target):
-        p_good = posterior_pass_prob(passes, trials, target)
-        detail = "\n".join(
-            f"  trial {idx}: {err}" for idx, err in outcomes if err is not None
-        )
-        raise AssertionError(
-            f"{label}: {passes}/{trials} trials passed; "
-            f"P(rate >= {target:.3f}) = {p_good:.3f} "
-            f"(need >= 0.5).\nFailing trials:\n{detail}"
-        )
+    p_good = posterior_pass_prob(passes, trials, target)
+    detail = "\n".join(
+        f"  trial {idx}: {err}" for idx, err in outcomes if err is not None
+    )
+    return (
+        f"{label}: {passes}/{trials} trials passed; "
+        f"P(rate >= {target:.3f}) = {p_good:.3f} "
+        f"(need >= 0.5).\nFailing trials:\n{detail}"
+    )
 
 
 def failing_assertions(

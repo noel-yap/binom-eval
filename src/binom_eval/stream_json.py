@@ -114,3 +114,17 @@ def agent_invoked(run: EvalRun, agent_name: str) -> bool:
 def skill_invoked_in_tools(run: EvalRun, skill_name: str) -> bool:
     """True when the Skill tool was used with ``skill_name``."""
     return tool_invoked(run, "Skill", skill_name)
+
+
+def skill_was_invoked(run: EvalRun, skill_name: str) -> bool:
+    """True when the skill fired via stream flag or Skill tool."""
+    return run.skill_invoked or skill_invoked_in_tools(run, skill_name)
+
+
+def agent_or_skill_invoked(
+    run: EvalRun, agent_name: str, skill_name: str
+) -> bool:
+    """True when ``agent_name`` or ``skill_name`` was invoked via tools."""
+    return agent_invoked(run, agent_name) or skill_invoked_in_tools(
+        run, skill_name
+    )

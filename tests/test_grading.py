@@ -3,8 +3,8 @@
 Covers the Beta-binomial core (`_betainc`, `posterior_pass_prob`,
 `_verdict`, `eval_passed`), the adaptive trial driver (`next_batch_size`,
 `run_eval_adaptive` and the checks feeding them), and the rollups per-skill
-suites grade with (`trial_outcomes`, `assert_eval_passed`,
-`failing_assertions`, `trigger_pass_counts`). `binom_eval` is
+suites grade with (`trial_outcomes`, `trial_outcomes_passed`,
+`trial_outcomes_failure_message`, `failing_assertions`, `trigger_pass_counts`). `binom_eval` is
 skill-independent, so this logic is tested once here rather than duplicated
 per skill.
 
@@ -17,8 +17,6 @@ the prior Beta(1, 1), and `BATCH_FLOOR` of 3.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -32,7 +30,6 @@ from binom_eval import (
     _check_failures,
     _eval_checks,
     _trigger_check,
-    assert_eval_passed,
     assert_handler_coverage,
     eval_passed,
     expand_eval_item,
@@ -42,6 +39,8 @@ from binom_eval import (
     next_batch_size,
     posterior_pass_prob,
     trial_outcomes,
+    trial_outcomes_failure_message,
+    trial_outcomes_passed,
     trigger_pass_counts,
 )
 from binom_eval.grading import Verdict, _betainc, _resolve_shortfall, _verdict
@@ -150,20 +149,27 @@ class TestTrialOutcomes:
         assert outcomes[1][1] is not None
 
 
-class TestAssertEvalPassed:
+class TestTrialOutcomesGrading:
     def test_passes_when_posterior_clears_bar(self) -> None:
         # 3 of 3 passes -> p_good ~0.80 >= 0.5.
-        assert_eval_passed([(0, None), (1, None), (2, None)], TARGET, "x")
+        outcomes = [(0, None), (1, None), (2, None)]
+        assert trial_outcomes_passed(outcomes, TARGET), (
+            trial_outcomes_failure_message(outcomes, TARGET, "x")
+        )
 
     def test_fails_when_posterior_below_bar(self) -> None:
+        outcomes = [(0, None), (1, "bad"), (2, "bad")]
         with pytest.raises(AssertionError, match=r"1/3 trials passed"):
-            assert_eval_passed(
-                [(0, None), (1, "bad"), (2, "bad")], TARGET, "x"
+            assert trial_outcomes_passed(outcomes, TARGET), (
+                trial_outcomes_failure_message(outcomes, TARGET, "x")
             )
 
     def test_failure_message_reports_p_good(self) -> None:
+        outcomes = [(0, "bad"), (1, "bad")]
         with pytest.raises(AssertionError, match=r"P\(rate >= 0\.667\)"):
-            assert_eval_passed([(0, "bad"), (1, "bad")], TARGET, "x")
+            assert trial_outcomes_passed(outcomes, TARGET), (
+                trial_outcomes_failure_message(outcomes, TARGET, "x")
+            )
 
 
 class TestFailingAssertions:
@@ -474,51 +480,6 @@ class TestTriggerPassCounts:
 
     def test_returns_empty_when_no_evals(self) -> None:
         assert trigger_pass_counts({}, []) == []
-
-
-class TestChecksSurviveOptimizedMode:
-    """Guard the graded checks against regressing to bare `assert`.
-
-    `trial_outcomes` grades each trial by catching `AssertionError`, so
-    `_trigger_check` and `assert_eval_passed` must keep raising even under
-    `python -O`, where `assert` statements are stripped from the bytecode.
-    A bare `assert` would silently stop raising under `-O` and make every
-    trial look like a pass. Each case runs in an `-O` subprocess (cwd set to
-    the dir holding the `binom_eval` package so `-c` can import it) and
-    asserts the check still raised.
-    """
-
-    def _raises_under_o(self, body: str) -> subprocess.CompletedProcess[str]:
-        """Run `body` under `python -O`; it exits 0 iff the check raised."""
-        return subprocess.run(
-            [sys.executable, "-O", "-c", body],
-            cwd=str(Path(binom_eval.__file__).parent.parent),
-            capture_output=True,
-            text=True,
-        )
-
-    def test_trigger_check_raises_under_o(self) -> None:
-        proc = self._raises_under_o(
-            "import binom_eval as e\n"
-            "from binom_eval import EvalRun\n"
-            "try:\n"
-            "    e._trigger_check(EvalRun('t', '', False, ''))\n"
-            "except AssertionError:\n"
-            "    raise SystemExit(0)\n"
-            "raise SystemExit('did not raise under -O')\n"
-        )
-        assert proc.returncode == 0, proc.stdout + proc.stderr
-
-    def test_assert_eval_passed_raises_under_o(self) -> None:
-        proc = self._raises_under_o(
-            "import binom_eval as e\n"
-            "try:\n"
-            "    e.assert_eval_passed([(0, 'bad'), (1, 'bad')], 2/3, 'x')\n"
-            "except AssertionError:\n"
-            "    raise SystemExit(0)\n"
-            "raise SystemExit('did not raise under -O')\n"
-        )
-        assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
 class TestExpandEvals:

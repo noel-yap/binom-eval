@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from binom_eval import missing_from
+from binom_eval import contains, contains_all, has_code_blocks, missing_from
 
 
 class TestMissingFrom:
@@ -24,3 +24,27 @@ class TestMissingFrom:
 
     def test_empty_needles_returns_empty(self) -> None:
         assert missing_from((), "abc") == []
+
+
+class TestContains:
+    def test_true_when_needle_present(self) -> None:
+        assert contains("abc", "b") is True
+
+    def test_false_when_needle_absent(self) -> None:
+        assert contains("abc", "z") is False
+
+
+class TestContainsAll:
+    def test_true_when_all_present(self) -> None:
+        assert contains_all("abc", ("a", "b")) is True
+
+    def test_false_when_any_missing(self) -> None:
+        assert contains_all("abc", ("a", "z")) is False
+
+
+class TestHasCodeBlocks:
+    def test_true_when_fenced_block_present(self) -> None:
+        assert has_code_blocks("```ts\nconst x = 1\n```") is True
+
+    def test_false_when_no_fence(self) -> None:
+        assert has_code_blocks("plain text") is False
