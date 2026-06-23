@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "binom-eval"
-version = "0.2.2"
+version = "0.2.3"
 description = "Bayesian (Beta-binomial) grading for AI skill / agent evals run via `claude -p`."
 readme = "README.md"
 license = { file = "LICENSE" }

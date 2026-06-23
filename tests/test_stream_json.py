@@ -20,6 +20,8 @@ from binom_eval import (
     agent_invoked,
     parse_stream_json,
     skill_invoked_in_tools,
+    skill_was_invoked,
+    agent_or_skill_invoked,
     tool_invoked,
 )
 
@@ -238,3 +240,22 @@ class TestToolInvocation:
             ],
         )
         assert tool_invoked(run, "Skill", SKILL) is True
+
+    def test_skill_was_invoked_from_stream_flag(self) -> None:
+        from binom_eval import EvalRun
+
+        run = EvalRun(
+            eval_id="t",
+            prompt="",
+            skill_invoked=True,
+            assistant_text="",
+            tool_uses=[],
+        )
+        assert skill_was_invoked(run, SKILL) is True
+
+    def test_agent_or_skill_invoked(self) -> None:
+        run = self._run("Agent", {"name": "dependency-injection"})
+        assert agent_or_skill_invoked(
+            run, "dependency-injection", "dependency-injection"
+        )
+        assert not agent_or_skill_invoked(run, "other", "other-skill")

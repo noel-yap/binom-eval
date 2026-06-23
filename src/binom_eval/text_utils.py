@@ -51,3 +51,18 @@ def missing_from(needles: tuple[str, ...], haystack: str) -> list[str]:
       []
     """
     return list(filter(lambda n: n not in haystack, needles))
+
+
+def contains(haystack: str, needle: str) -> bool:
+    """True when ``needle`` appears in ``haystack``."""
+    return needle in haystack
+
+
+def contains_all(haystack: str, needles: tuple[str, ...]) -> bool:
+    """True when every ``needles`` entry appears in ``haystack``."""
+    return not missing_from(needles, haystack)
+
+
+def has_code_blocks(text: str) -> bool:
+    """True when ``text`` contains at least one fenced code block."""
+    return bool(code_blocks(text))

@@ -48,7 +48,6 @@ from binom_eval.grading import (
     _check_failures,
     _eval_checks,
     _trigger_check,
-    assert_eval_passed,
     assert_handler_coverage,
     eval_passed,
     expand_eval_item,
@@ -59,6 +58,8 @@ from binom_eval.grading import (
     posterior_pass_prob,
     run_eval_adaptive,
     trial_outcomes,
+    trial_outcomes_failure_message,
+    trial_outcomes_passed,
     trigger_pass_counts,
 )
 from binom_eval.plugin import (
@@ -92,6 +93,8 @@ from binom_eval.stream_json import (
     agent_invoked,
     parse_stream_json,
     skill_invoked_in_tools,
+    skill_was_invoked,
+    agent_or_skill_invoked,
     tool_invoked,
 )
 from binom_eval.text_utils import (
@@ -99,7 +102,10 @@ from binom_eval.text_utils import (
     CODE_BLOCK_RE,
     NAMED_FN_RE,
     code_blocks,
+    contains,
+    contains_all,
     first_line,
+    has_code_blocks,
     missing_from,
 )
 
@@ -109,13 +115,18 @@ __all__ = [
     "CODE_BLOCK_RE",
     "NAMED_FN_RE",
     "code_blocks",
+    "contains",
+    "contains_all",
     "first_line",
+    "has_code_blocks",
     "missing_from",
     # stream_json
     "EvalRun",
     "agent_invoked",
+    "agent_or_skill_invoked",
     "parse_stream_json",
     "skill_invoked_in_tools",
+    "skill_was_invoked",
     "tool_invoked",
     # runner
     "DEFAULT_TIMEOUT_SECONDS",
@@ -131,7 +142,6 @@ __all__ = [
     "PASS_THRESHOLD",
     "PRIOR_ALPHA",
     "PRIOR_BETA",
-    "assert_eval_passed",
     "assert_handler_coverage",
     "eval_passed",
     "expand_eval_item",
@@ -142,6 +152,8 @@ __all__ = [
     "posterior_pass_prob",
     "run_eval_adaptive",
     "trial_outcomes",
+    "trial_outcomes_failure_message",
+    "trial_outcomes_passed",
     "trigger_pass_counts",
     # plugin
     "DEFAULT_CONCURRENCY",

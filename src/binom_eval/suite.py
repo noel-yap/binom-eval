@@ -15,12 +15,13 @@ from typing import Any, Literal
 import pytest
 
 from binom_eval.grading import (
-    assert_eval_passed,
     eval_passed,
     expand_evals,
     failing_assertions,
     load_evals,
     trial_outcomes,
+    trial_outcomes_failure_message,
+    trial_outcomes_passed,
     trigger_pass_counts,
 )
 from binom_eval.plugin import make_eval_runs_fixture
@@ -114,8 +115,11 @@ def register_live_eval_tests(
     ) -> None:
         handler = handlers[assertion_id]
         outcomes = trial_outcomes(eval_runs[eval_id], handler)
-        assert_eval_passed(
-            outcomes, live_eval_target_rate, f"{eval_id}::{assertion_id}"
+        label = f"{eval_id}::{assertion_id}"
+        assert trial_outcomes_passed(outcomes, live_eval_target_rate), (
+            trial_outcomes_failure_message(
+                outcomes, live_eval_target_rate, label
+            )
         )
 
     @pytest.mark.live_eval
