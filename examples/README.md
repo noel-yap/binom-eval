@@ -8,8 +8,8 @@ consumer supplies:
 | --- | --- |
 | `evals.json` | The prompts, per-eval assertion ids, and `should_trigger` flags. |
 | `_assertions.py` | `ASSERTION_HANDLERS`: one handler per assertion id, each raising `AssertionError` when a run fails it. Built on `binom_eval`'s text helpers. |
-| `conftest.py` | Binds the session-scoped `eval_runs` fixture via `make_eval_runs_fixture(...)`. |
-| `test_evals.py` | Grades each assertion's trial outcomes against the target rate. |
+| `conftest.py` | Binds the session-scoped `eval_runs` fixture via `bind_eval_runs_fixture(...)`. |
+| `test_evals.py` | Registers the standard live-eval tests via `register_live_eval_tests(...)`. |
 
 Run it (needs the `claude` CLI on `PATH`):
 
@@ -27,7 +27,7 @@ no `sys.path` wiring or hook re-exports needed.
 `make_eval_runs_fixture` runs each eval through `run_eval_adaptive`: trials
 fire in concurrent batches and re-grade after each, stopping as soon as the
 Beta-binomial posterior locks every assertion PASS or any assertion FAIL.
-`test_evals.py` then turns each assertion's per-trial outcomes into a verdict
-with `assert_eval_passed`, which passes when the posterior puts ≥ ½ of its
-mass at or above the target rate. The `should_trigger` rollup uses
-`trigger_pass_counts` to grade whether the skill actually fired.
+`register_live_eval_tests` turns each assertion's per-trial outcomes into a
+verdict with `assert_eval_passed`, which passes when the posterior puts ≥ ½ of
+its mass at or above the target rate. The `should_trigger` rollup grades
+whether the skill actually fired.

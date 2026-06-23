@@ -70,6 +70,7 @@ from binom_eval.plugin import (
     pytest_addoption,
     pytest_configure,
 )
+from binom_eval.suite import bind_eval_runs_fixture, register_live_eval_tests
 from binom_eval.runner import (
     DEFAULT_TIMEOUT_SECONDS,
     ISOLATION_IGNORE,
@@ -150,4 +151,7 @@ __all__ = [
     "make_eval_runs_fixture",
     "pytest_addoption",
     "pytest_configure",
+    # suite
+    "bind_eval_runs_fixture",
+    "register_live_eval_tests",
 ]

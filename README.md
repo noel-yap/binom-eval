@@ -138,25 +138,33 @@ A skill's eval suite supplies four things and lets `binom-eval` do the rest:
 ```python
 # conftest.py
 from pathlib import Path
-from binom_eval import make_eval_runs_fixture
+from binom_eval import bind_eval_runs_fixture
 from ._assertions import ASSERTION_HANDLERS
 
 EVAL_DIR = Path(__file__).resolve().parent
 SKILL_NAME = EVAL_DIR.parent.name          # the skill Claude loads
-REPO_ROOT = EVAL_DIR.parents[3]            # where `claude -p` should run
 
-eval_runs = make_eval_runs_fixture(
-    EVAL_DIR / "evals.json", REPO_ROOT, SKILL_NAME, ASSERTION_HANDLERS
+eval_runs = bind_eval_runs_fixture(
+    EVAL_DIR, SKILL_NAME, ASSERTION_HANDLERS,
+    repo_root=EVAL_DIR.parents[3],         # omit to run in EVAL_DIR
 )
 ```
 
 ```python
 # test_evals.py
-from binom_eval import assert_eval_passed, failing_assertions, trial_outcomes
+from pathlib import Path
+from binom_eval import register_live_eval_tests
+from ._assertions import ASSERTION_HANDLERS
 
-def test_assertions_pass(eval_runs, live_eval_target_rate):
-    for eval_id, runs in eval_runs.items():
-        ...  # grade each assertion's trial outcomes against the target rate
+EVAL_DIR = Path(__file__).resolve().parent
+
+register_live_eval_tests(
+    globals(),
+    evals_path=EVAL_DIR / "evals.json",
+    handlers=ASSERTION_HANDLERS,
+    subject_name=EVAL_DIR.parent.name,
+    trigger="skill",                       # or "agent" for agent suites
+)
 ```
 
 Run the live suite:
@@ -190,6 +198,7 @@ consider_namespace_packages = true
 | Symbol | Purpose |
 | --- | --- |
 | `make_eval_runs_fixture` | Build the session-scoped `eval_runs` pytest fixture. |
+| `bind_eval_runs_fixture`, `register_live_eval_tests` | Thin suite wiring for `conftest.py` / `test_evals.py`. |
 | `run_eval_adaptive`, `next_batch_size` | The adaptive trial driver. |
 | `posterior_pass_prob`, `eval_passed` | Beta-binomial posterior + final grade. |
 | `assert_eval_passed`, `failing_assertions`, `trigger_pass_counts` | Grading rollups for a completed batch. |
