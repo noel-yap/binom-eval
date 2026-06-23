@@ -127,7 +127,9 @@ your test suite with no extra wiring. Live evals require the `claude` CLI on
 
 A skill's eval suite supplies four things and lets `binom-eval` do the rest:
 
-1. an **`evals.json`** — the prompts and per-eval assertion ids;
+1. an **`evals.json`** — the prompts and per-eval assertion ids (each eval
+   may supply a literal `"prompt"` or a `"prompt_template"` + `"fixture"` pair;
+   fixture paths are relative to the directory containing `evals.json`);
 2. **assertion handlers** — `dict[str, Callable[[EvalRun], None]]`, each
    raising `AssertionError` when the run fails that assertion;
 3. a **`conftest.py`** that binds the `eval_runs` fixture; and
@@ -193,8 +195,9 @@ consider_namespace_packages = true
 | `assert_eval_passed`, `failing_assertions`, `trigger_pass_counts` | Grading rollups for a completed batch. |
 | `run_claude`, `run_claude_batch`, `stripped_env` | The `claude -p` I/O layer. |
 | `EvalRun`, `parse_stream_json` | Stream-json parsing into the shared record. |
+| `agent_invoked`, `skill_invoked_in_tools`, `tool_invoked` | Inspect `EvalRun.tool_uses` for Agent/Skill delegation. |
 | `code_blocks`, `first_line`, `missing_from`, `NAMED_FN_RE`, `ARROW_FN_RE` | Assertion text/regex helpers. |
-| `load_evals`, `assert_handler_coverage` | Load + validate an `evals.json`. |
+| `load_evals`, `expand_evals`, `assert_handler_coverage` | Load + expand + validate an `evals.json`. |
 
 ## Requirements
 

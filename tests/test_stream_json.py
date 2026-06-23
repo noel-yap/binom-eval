@@ -17,7 +17,10 @@ from binom_eval import (
     _message_from_event,
     _text_from_block,
     _try_parse_json,
+    agent_invoked,
     parse_stream_json,
+    skill_invoked_in_tools,
+    tool_invoked,
 )
 
 SKILL = "demo-skill"
@@ -169,3 +172,69 @@ class TestParseStreamJson:
         )
         invoked, text, _ = parse_stream_json("garbage line\n" + line, SKILL)
         assert (invoked, text) == (False, "ok")
+
+
+class TestToolInvocation:
+    def _run(self, tool_name: str, tool_input: dict) -> EvalRun:
+        from binom_eval import EvalRun
+
+        return EvalRun(
+            eval_id="t",
+            prompt="",
+            skill_invoked=False,
+            assistant_text="",
+            tool_uses=[
+                {"type": "tool_use", "name": tool_name, "input": tool_input},
+            ],
+        )
+
+    def test_agent_invoked(self) -> None:
+        run = self._run("Agent", {"name": "dependency-injection"})
+        assert agent_invoked(run, "dependency-injection") is True
+        assert agent_invoked(run, "other") is False
+
+    def test_skill_invoked_in_tools(self) -> None:
+        run = self._run("Skill", {"skill": SKILL})
+        assert skill_invoked_in_tools(run, SKILL) is True
+        assert skill_invoked_in_tools(run, "other-skill") is False
+
+    def test_tool_invoked_rejects_other_tool(self) -> None:
+        run = self._run("Read", {"skill": SKILL})
+        assert tool_invoked(run, "Skill", SKILL) is False
+
+    def test_tool_invoked_returns_false_when_tool_uses_empty(self) -> None:
+        from binom_eval import EvalRun
+
+        run = EvalRun(
+            eval_id="t",
+            prompt="",
+            skill_invoked=False,
+            assistant_text="",
+            tool_uses=[],
+        )
+        assert tool_invoked(run, "Skill", SKILL) is False
+
+    def test_tool_invoked_returns_true_when_target_appears_in_input(self) -> None:
+        run = self._run("Skill", {"skill": SKILL})
+        assert tool_invoked(run, "Skill", SKILL) is True
+
+    def test_tool_invoked_returns_false_when_tool_matches_but_target_missing(
+        self,
+    ) -> None:
+        run = self._run("Skill", {"skill": "other-skill"})
+        assert tool_invoked(run, "Skill", SKILL) is False
+
+    def test_tool_invoked_finds_match_in_later_tool_use(self) -> None:
+        from binom_eval import EvalRun
+
+        run = EvalRun(
+            eval_id="t",
+            prompt="",
+            skill_invoked=False,
+            assistant_text="",
+            tool_uses=[
+                {"type": "tool_use", "name": "Read", "input": {"path": "/tmp"}},
+                {"type": "tool_use", "name": "Skill", "input": {"skill": SKILL}},
+            ],
+        )
+        assert tool_invoked(run, "Skill", SKILL) is True
