@@ -94,3 +94,23 @@ def parse_stream_json(
     text = "\n".join(filter(None, map(_text_from_block, blocks)))
     tool_uses = list(filter(lambda b: b.get("type") == "tool_use", blocks))
     return skill_invoked, text, tool_uses
+
+
+def tool_invoked(run: EvalRun, tool_name: str, target: str) -> bool:
+    """True when ``tool_name`` was used with ``target`` in its input payload."""
+    for block in run.tool_uses:
+        if block.get("name") != tool_name:
+            continue
+        if target in str(block.get("input", {})):
+            return True
+    return False
+
+
+def agent_invoked(run: EvalRun, agent_name: str) -> bool:
+    """True when the Agent tool was used with ``agent_name``."""
+    return tool_invoked(run, "Agent", agent_name)
+
+
+def skill_invoked_in_tools(run: EvalRun, skill_name: str) -> bool:
+    """True when the Skill tool was used with ``skill_name``."""
+    return tool_invoked(run, "Skill", skill_name)

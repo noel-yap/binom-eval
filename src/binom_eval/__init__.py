@@ -51,6 +51,8 @@ from binom_eval.grading import (
     assert_eval_passed,
     assert_handler_coverage,
     eval_passed,
+    expand_eval_item,
+    expand_evals,
     failing_assertions,
     load_evals,
     next_batch_size,
@@ -86,7 +88,10 @@ from binom_eval.stream_json import (
     _message_from_event,
     _text_from_block,
     _try_parse_json,
+    agent_invoked,
     parse_stream_json,
+    skill_invoked_in_tools,
+    tool_invoked,
 )
 from binom_eval.text_utils import (
     ARROW_FN_RE,
@@ -107,7 +112,10 @@ __all__ = [
     "missing_from",
     # stream_json
     "EvalRun",
+    "agent_invoked",
     "parse_stream_json",
+    "skill_invoked_in_tools",
+    "tool_invoked",
     # runner
     "DEFAULT_TIMEOUT_SECONDS",
     "ISOLATION_IGNORE",
@@ -125,6 +133,8 @@ __all__ = [
     "assert_eval_passed",
     "assert_handler_coverage",
     "eval_passed",
+    "expand_eval_item",
+    "expand_evals",
     "failing_assertions",
     "load_evals",
     "next_batch_size",

@@ -35,6 +35,8 @@ from binom_eval import (
     assert_eval_passed,
     assert_handler_coverage,
     eval_passed,
+    expand_eval_item,
+    expand_evals,
     failing_assertions,
     load_evals,
     next_batch_size,
@@ -517,3 +519,74 @@ class TestChecksSurviveOptimizedMode:
             "raise SystemExit('did not raise under -O')\n"
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+class TestExpandEvals:
+    def test_expands_prompt_template_and_fixture(self, tmp_path: Path) -> None:
+        fixture_dir = tmp_path / "fixtures"
+        fixture_dir.mkdir()
+        (fixture_dir / "sample.ts").write_text("export const x = 1;\n")
+        evals_path = tmp_path / "evals.json"
+        evals_path.write_text(
+            json.dumps(
+                {
+                    "evals": [
+                        {
+                            "id": "demo",
+                            "prompt_template": "Refactor:\n```\n{fixture}\n```\n",
+                            "fixture": "fixtures/sample.ts",
+                            "assertions": [],
+                        }
+                    ]
+                }
+            )
+        )
+        evals = expand_evals(evals_path)
+        assert evals[0]["prompt"] == "Refactor:\n```\nexport const x = 1;\n\n```\n"
+
+    def test_load_evals_passes_through_literal_prompt(self, tmp_path: Path) -> None:
+        evals_path = tmp_path / "evals.json"
+        evals_path.write_text(
+            json.dumps({"evals": [{"id": "plain", "prompt": "hello", "assertions": []}]})
+        )
+        assert load_evals(evals_path)[0]["prompt"] == "hello"
+
+    def test_returns_item_unchanged_without_template_or_fixture(
+        self, tmp_path: Path
+    ) -> None:
+        item = {"id": "plain", "prompt": "hello", "assertions": []}
+        assert expand_eval_item(item, tmp_path) == item
+
+    def test_raises_when_only_fixture_is_provided(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="needs both prompt_template and fixture"):
+            expand_eval_item(
+                {"id": "broken", "fixture": "missing-template.txt", "assertions": []},
+                tmp_path,
+            )
+
+    def test_raises_when_only_template_is_provided(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match=r"eval 'broken' needs both"):
+            expand_eval_item(
+                {
+                    "id": "broken",
+                    "prompt_template": "Use:\n{fixture}",
+                    "assertions": [],
+                },
+                tmp_path,
+            )
+
+    def test_expansion_removes_template_and_fixture_keys(self, tmp_path: Path) -> None:
+        fixture = tmp_path / "sample.txt"
+        fixture.write_text("fixture body\n")
+        result = expand_eval_item(
+            {
+                "id": "demo",
+                "prompt_template": "Content:\n{fixture}",
+                "fixture": "sample.txt",
+                "assertions": [],
+            },
+            tmp_path,
+        )
+        assert "prompt_template" not in result
+        assert "fixture" not in result
+        assert result["prompt"] == "Content:\nfixture body\n"

@@ -365,11 +365,36 @@ def assert_handler_coverage(
         )
 
 
+def expand_eval_item(item: dict[str, Any], eval_dir: Path) -> dict[str, Any]:
+    """Return one eval dict with ``prompt_template`` + ``fixture`` expanded."""
+    expanded = dict(item)
+    fixture = expanded.pop("fixture", None)
+    template = expanded.pop("prompt_template", None)
+    if fixture is not None and template is not None:
+        content = (eval_dir / fixture).read_text(encoding="utf-8")
+        expanded["prompt"] = template.format(fixture=content)
+    elif fixture is not None or template is not None:
+        raise ValueError(
+            f"eval {expanded.get('id')!r} needs both prompt_template and fixture"
+        )
+    return expanded
+
+
+def expand_evals(evals_path: Path) -> list[dict[str, Any]]:
+    """Load ``evals.json`` and expand any ``prompt_template`` + ``fixture`` pairs."""
+    eval_dir = evals_path.parent
+    raw = json.loads(evals_path.read_text(encoding="utf-8"))["evals"]
+    return [expand_eval_item(item, eval_dir) for item in raw]
+
+
 def load_evals(
     evals_path: Path,
     handlers: dict[str, Callable[[EvalRun], None]] | None = None,
 ) -> list[dict[str, Any]]:
     """Read an `evals.json` file and return its list of eval items.
+
+    Eval entries may supply a finished ``prompt`` or a ``prompt_template`` plus
+    ``fixture`` path (relative to the directory containing ``evals.json``).
 
     Args:
         evals_path: Path to a skill's `evals.json`, an object with an
@@ -380,9 +405,9 @@ def load_evals(
             downstream grading never meets an ungradeable assertion.
 
     Returns:
-        The value of the file's top-level `"evals"` array.
+        The value of the file's top-level `"evals"` array, with prompts expanded.
     """
-    evals = json.loads(evals_path.read_text(encoding="utf-8"))["evals"]
+    evals = expand_evals(evals_path)
     if handlers is not None:
         assert_handler_coverage(evals, handlers)
     return evals
