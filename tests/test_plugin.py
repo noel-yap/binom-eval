@@ -12,7 +12,8 @@ from typing import Any
 
 import pytest
 
-from binom_eval import DEFAULT_MAX_TRIALS, DEFAULT_TARGET_RATE, plugin
+from binom_eval import DEFAULT_MAX_TRIALS, DEFAULT_MODEL, DEFAULT_TARGET_RATE, plugin
+from binom_eval.stream_json import EvalRun
 from binom_eval.grading import BATCH_FLOOR, FAIL_THRESHOLD, PASS_THRESHOLD
 from binom_eval.plugin import make_eval_runs_fixture, pytest_addoption
 
@@ -37,6 +38,7 @@ class TestPytestAddOption:
         options = self._options()
         assert "--live-eval-max-trials" in options
         assert "--live-eval-target-rate" in options
+        assert "--live-eval-model" in options
 
     def test_max_trials_defaults_to_constant_and_is_int(self) -> None:
         opt = self._options()["--live-eval-max-trials"]
@@ -47,6 +49,11 @@ class TestPytestAddOption:
         opt = self._options()["--live-eval-target-rate"]
         assert opt["default"] == DEFAULT_TARGET_RATE
         assert opt["type"] is float
+
+    def test_model_defaults_to_constant_and_is_str(self) -> None:
+        opt = self._options()["--live-eval-model"]
+        assert opt["default"] == DEFAULT_MODEL
+        assert opt["type"] is str
 
 
 class TestDefaults:
@@ -62,6 +69,13 @@ class TestDefaults:
         assert abs((PASS_THRESHOLD + FAIL_THRESHOLD) - 1.0) < 1e-12
 
 
+class _NullPluginManager:
+    """Stub for pluginmanager: always returns None from get_plugin."""
+
+    def get_plugin(self, _name: str) -> None:
+        return None
+
+
 class _StubConfig:
     """Stands in for `pytest.Config`, answering `getoption` from a dict."""
 
@@ -71,13 +85,16 @@ class _StubConfig:
         target: float,
         concurrency: int = 4,
         isolate: bool = False,
+        model: str | None = None,
     ) -> None:
         self._options = {
             "--live-eval-max-trials": max_trials,
             "--live-eval-target-rate": target,
             "--live-eval-concurrency": concurrency,
             "--live-eval-isolate": isolate,
+            "--live-eval-model": model,
         }
+        self.pluginmanager = _NullPluginManager()
 
     def getoption(self, name: str) -> Any:
         return self._options[name]
@@ -132,15 +149,24 @@ class TestMakeEvalRunsFixture:
             *,
             gate: Any = None,
             isolate: bool = False,
-        ) -> list[str]:
+            model: str | None = None,
+        ) -> list[EvalRun]:
             calls.append((item["id"], max_trials, target))
-            return [f"run:{item['id']}"]
+            return [
+                EvalRun(
+                    eval_id=item["id"],
+                    prompt="",
+                    skill_invoked=False,
+                    assistant_text="",
+                )
+            ]
 
         monkeypatch.setattr(plugin, "run_eval_adaptive", fake_adaptive)
 
         result = self._fixture_fn()(_StubConfig(21, 2.0 / 3.0))
 
-        assert result == {"e1": ["run:e1"], "e2": ["run:e2"]}
+        assert set(result.keys()) == {"e1", "e2"}
+        assert all(len(runs) == 1 and runs[0].eval_id == eid for eid, runs in result.items())
         # Evals are driven through a thread pool, so the recorded order is not
         # guaranteed; assert on the set of ids and the shared params instead.
         assert {eval_id for eval_id, *_ in calls} == {"e1", "e2"}

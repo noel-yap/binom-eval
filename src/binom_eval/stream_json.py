@@ -23,6 +23,7 @@ class EvalRun:
     skill_invoked: bool
     assistant_text: str
     tool_uses: list[dict[str, Any]] = field(default_factory=list)
+    model: str = ""
 
 
 def _try_parse_json(line: str) -> dict[str, Any] | None:
@@ -83,17 +84,28 @@ def _text_from_block(block: dict[str, Any]) -> str | None:
     return block.get("text", "") if block.get("type") == "text" else None
 
 
+def _model_from_events(events: list[dict[str, Any]]) -> str:
+    """Extract the model name from the system init event, or '' when absent."""
+    for ev in events:
+        if ev.get("type") == "system" and ev.get("subtype") == "init":
+            model = ev.get("model", "")
+            if model:
+                return str(model)
+    return ""
+
+
 def parse_stream_json(
     stdout: str, skill_name: str
-) -> tuple[bool, str, list[dict[str, Any]]]:
+) -> tuple[bool, str, list[dict[str, Any]], str]:
     """Parse `claude -p --output-format stream-json` stdout into
-    (skill_invoked, assistant_text, tool_uses)."""
+    (skill_invoked, assistant_text, tool_uses, model)."""
     events = list(filter(None, map(_try_parse_json, stdout.splitlines())))
     blocks = _assistant_content_blocks(events)
     skill_invoked = any(_is_skill_hit(b, skill_name) for b in blocks)
     text = "\n".join(filter(None, map(_text_from_block, blocks)))
     tool_uses = list(filter(lambda b: b.get("type") == "tool_use", blocks))
-    return skill_invoked, text, tool_uses
+    model = _model_from_events(events)
+    return skill_invoked, text, tool_uses, model
 
 
 def tool_invoked(run: EvalRun, tool_name: str, target: str) -> bool:

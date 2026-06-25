@@ -25,6 +25,7 @@ from binom_eval.grading import (
     load_evals,
     run_eval_adaptive,
 )
+from binom_eval.runner import cli_version
 from binom_eval.stream_json import EvalRun
 
 # Budget ceiling: the most trials any single eval will ever run. A verdict
@@ -50,6 +51,46 @@ DEFAULT_CONCURRENCY = 5
 # rate >= 0.9 -> ~0.2%) while still catching clearly-broken skills; it favours
 # not red-flagging working skills over catching mildly-broken (~0.6) ones.
 DEFAULT_TARGET_RATE = 3.0 / 5.0
+
+# Shorthand alias recognised by the claude CLI; resolves to the latest Haiku.
+DEFAULT_MODEL = "haiku"
+
+
+class _SessionReporter:
+    """Pytest plugin that surfaces the claude CLI version and model in output.
+
+    Registered programmatically in `pytest_configure` so external conftest.py
+    files do not need to re-export any additional hooks. The CLI version is
+    captured once at session start via `cli_version()`; the model is set by
+    `make_eval_runs_fixture` after the runs complete, read from the actual
+    model field in the stream-json response.
+    """
+
+    def __init__(self) -> None:
+        self._version: str = ""
+        self._model: str = ""
+
+    def set_version(self, version: str) -> None:
+        self._version = version
+
+    def set_model(self, model: str) -> None:
+        self._model = model
+
+    def pytest_report_header(self) -> list[str]:
+        if self._version:
+            return [f"claude CLI: {self._version}"]
+        return []
+
+    def pytest_terminal_summary(
+        self, terminalreporter: Any, exitstatus: Any, config: Any
+    ) -> None:
+        parts: list[str] = []
+        if self._version:
+            parts.append(f"CLI {self._version}")
+        if self._model:
+            parts.append(f"model {self._model}")
+        if parts:
+            terminalreporter.write_sep("-", "claude: " + "  ".join(parts))
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -104,15 +145,28 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "other; off by default since it copies the tree per run."
         ),
     )
+    parser.addoption(
+        "--live-eval-model",
+        action="store",
+        type=str,
+        default=DEFAULT_MODEL,
+        help=(
+            "Model to pass as `--model` to every `claude -p` trial "
+            f"(e.g. claude-haiku-4-5-20251001). Default: {DEFAULT_MODEL}."
+        ),
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Register the `live_eval` marker for selecting/skipping live tests."""
+    """Register the `live_eval` marker and the session reporter plugin."""
     config.addinivalue_line(
         "markers",
         "live_eval: end-to-end test that invokes `claude -p` (real model "
         "call). Select with `-m live_eval`; exclude with `-m 'not live_eval'`.",
     )
+    reporter = _SessionReporter()
+    reporter.set_version(cli_version())
+    config.pluginmanager.register(reporter, "binom_eval_reporter")
 
 
 def make_eval_runs_fixture(
@@ -145,6 +199,7 @@ def make_eval_runs_fixture(
         target = pytestconfig.getoption("--live-eval-target-rate")
         concurrency = pytestconfig.getoption("--live-eval-concurrency")
         isolate = pytestconfig.getoption("--live-eval-isolate")
+        model = pytestconfig.getoption("--live-eval-model")
         gate = threading.Semaphore(concurrency)
         evals = load_evals(evals_path, assertion_handlers)
 
@@ -159,6 +214,7 @@ def make_eval_runs_fixture(
                 checks,
                 gate=gate,
                 isolate=isolate,
+                model=model,
             )
 
         # Drive the evals concurrently; the shared `gate` -- not the worker
@@ -167,7 +223,20 @@ def make_eval_runs_fixture(
         workers = max(1, min(len(evals), 4 * concurrency))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             runs = list(pool.map(build, evals))
-        return {item["id"]: run for item, run in zip(evals, runs)}
+        result = {item["id"]: run for item, run in zip(evals, runs)}
+
+        actual_model = next(
+            (run.model for run_list in result.values() for run in run_list if run.model),
+            "",
+        )
+        if actual_model:
+            reporter = pytestconfig.pluginmanager.get_plugin(
+                "binom_eval_reporter"
+            )
+            if reporter is not None:
+                reporter.set_model(actual_model)
+
+        return result
 
     return eval_runs
 

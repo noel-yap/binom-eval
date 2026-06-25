@@ -69,6 +69,21 @@ def stripped_env() -> dict[str, str]:
     }
 
 
+def cli_version() -> str:
+    """Return the `claude` CLI version string, or '' when not on PATH."""
+    try:
+        result = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=stripped_env(),
+        )
+        return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
+
+
 @contextlib.contextmanager
 def isolated_workdir(repo_root: Path, isolate: bool) -> Iterator[Path]:
     """Yield the working directory for a single run.
@@ -108,12 +123,15 @@ def run_claude(
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     *,
     isolate: bool = False,
+    model: str | None = None,
 ) -> EvalRun:
     """Invoke `claude -p` once and parse its stream-json output.
 
     With `isolate=True` the call runs in a throwaway copy of `repo_root`
     (see `isolated_workdir`) so a skill that writes to the tree cannot affect
     `repo_root` or a concurrent run; otherwise it runs in `repo_root` directly.
+    `model`, when given, is forwarded as `--model` so callers can select a
+    cheaper or faster model for eval runs without changing the CLI default.
     """
     cmd = [
         "claude",
@@ -125,6 +143,8 @@ def run_claude(
         "--include-partial-messages",
         "--dangerously-skip-permissions",
     ]
+    if model is not None:
+        cmd += ["--model", model]
     with isolated_workdir(repo_root, isolate) as workdir:
         proc = subprocess.run(
             cmd,
@@ -134,7 +154,7 @@ def run_claude(
             env=stripped_env(),
             timeout=timeout,
         )
-    skill_invoked, assistant_text, tool_uses = parse_stream_json(
+    skill_invoked, assistant_text, tool_uses, model = parse_stream_json(
         proc.stdout, skill_name
     )
     return EvalRun(
@@ -143,6 +163,7 @@ def run_claude(
         skill_invoked=skill_invoked,
         assistant_text=assistant_text,
         tool_uses=tool_uses,
+        model=model,
     )
 
 
@@ -154,6 +175,7 @@ def run_claude_batch(
     *,
     gate: threading.Semaphore | None = None,
     isolate: bool = False,
+    model: str | None = None,
 ) -> list[EvalRun]:
     """Run `claude -p` `count` times for one eval, concurrently.
 
@@ -166,7 +188,8 @@ def run_claude_batch(
     spawning its subprocess; the same object passed across batches and across
     concurrently-running evals caps total live `claude -p` calls at its count.
     `isolate` is forwarded to `run_claude` so each trial runs in its own
-    throwaway copy of `repo_root` when set.
+    throwaway copy of `repo_root` when set. `model`, when given, selects a
+    specific model for all trials in the batch.
     """
     eid = item["id"]
     prompt = item["prompt"]
@@ -176,7 +199,9 @@ def run_claude_batch(
 
     def one(_: int) -> EvalRun:
         with limit:
-            return run_claude(prompt, repo_root, skill_name, isolate=isolate)
+            return run_claude(
+                prompt, repo_root, skill_name, isolate=isolate, model=model
+            )
 
     with ThreadPoolExecutor(max_workers=count) as pool:
         runs = list(pool.map(one, range(count)))
