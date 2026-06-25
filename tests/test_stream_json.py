@@ -128,7 +128,7 @@ class TestTextFromBlock:
 
 class TestParseStreamJson:
     def test_no_skill_no_text(self) -> None:
-        assert parse_stream_json("", SKILL) == (False, "", [])
+        assert parse_stream_json("", SKILL) == (False, "", [], "")
 
     def test_detects_skill_invocation_and_text(self) -> None:
         events = [
@@ -146,7 +146,7 @@ class TestParseStreamJson:
                 },
             }
         ]
-        invoked, text, tools = parse_stream_json(
+        invoked, text, tools, model = parse_stream_json(
             "\n".join(map(json.dumps, events)), SKILL
         )
         assert invoked is True
@@ -162,7 +162,7 @@ class TestParseStreamJson:
                 },
             }
         )
-        invoked, _, _ = parse_stream_json(line, SKILL)
+        invoked, *_ = parse_stream_json(line, SKILL)
         assert invoked is False
 
     def test_ignores_unparseable_lines(self) -> None:
@@ -172,9 +172,54 @@ class TestParseStreamJson:
                 "message": {"content": [{"type": "text", "text": "ok"}]},
             }
         )
-        invoked, text, _ = parse_stream_json("garbage line\n" + line, SKILL)
+        invoked, text, *_ = parse_stream_json("garbage line\n" + line, SKILL)
         assert (invoked, text) == (False, "ok")
 
+
+
+class TestModelFromEvents:
+    def test_extracts_model_from_system_init(self) -> None:
+        from binom_eval import _model_from_events
+
+        events = [
+            {"type": "system", "subtype": "init", "model": "claude-sonnet-4-6"}
+        ]
+        assert _model_from_events(events) == "claude-sonnet-4-6"
+
+    def test_returns_empty_when_no_system_event(self) -> None:
+        from binom_eval import _model_from_events
+
+        assert _model_from_events([]) == ""
+        assert _model_from_events([{"type": "assistant"}]) == ""
+
+    def test_returns_empty_when_model_key_absent(self) -> None:
+        from binom_eval import _model_from_events
+
+        events = [{"type": "system", "subtype": "init"}]
+        assert _model_from_events(events) == ""
+
+    def test_ignores_non_init_system_events(self) -> None:
+        from binom_eval import _model_from_events
+
+        events = [{"type": "system", "subtype": "other", "model": "x"}]
+        assert _model_from_events(events) == ""
+
+    def test_parse_stream_json_extracts_model(self) -> None:
+        import json as _json
+
+        events = [
+            {"type": "system", "subtype": "init", "model": "claude-haiku-4-5"},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "hi"}]
+                },
+            },
+        ]
+        _, _, _, model = parse_stream_json(
+            "\n".join(map(_json.dumps, events)), SKILL
+        )
+        assert model == "claude-haiku-4-5"
 
 class TestToolInvocation:
     def _run(self, tool_name: str, tool_input: dict) -> EvalRun:

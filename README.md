@@ -118,8 +118,8 @@ uv add "binom-eval @ git+https://github.com/noel-yap/binom-eval"
 ```
 
 Installing registers a pytest plugin, so the `--live-eval-max-trials`,
-`--live-eval-target-rate`, `--live-eval-concurrency`, and
-`--live-eval-isolate` options and the `live_eval` marker become available to
+`--live-eval-target-rate`, `--live-eval-concurrency`, `--live-eval-isolate`,
+and `--live-eval-model` options and the `live_eval` marker become available to
 your test suite with no extra wiring. Live evals require the `claude` CLI on
 `PATH`; when it's absent the fixture skips rather than fails.
 
@@ -177,6 +177,9 @@ pytest path/to/evals -m live_eval \
 # run more trials at once; isolate runs for a skill that writes to the tree:
 pytest path/to/evals -m live_eval \
     --live-eval-concurrency 8 --live-eval-isolate
+# select a specific model (default: haiku):
+pytest path/to/evals -m live_eval \
+    --live-eval-model claude-sonnet-4-6
 ```
 
 See [`examples/`](examples/) for the full consumer pattern, including

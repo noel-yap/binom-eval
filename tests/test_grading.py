@@ -421,6 +421,7 @@ class TestRunEvalAdaptive:
             *,
             gate: object = None,
             isolate: bool = False,
+            model: str | None = None,
         ) -> list[EvalRun]:
             chunk = scripted[state["i"] : state["i"] + count]
             state["i"] += count
@@ -452,6 +453,7 @@ class TestRunEvalAdaptive:
             *,
             gate: object = None,
             isolate: bool = False,
+            model: str | None = None,
         ) -> list[EvalRun]:
             return _runs(*([False] * count))
 

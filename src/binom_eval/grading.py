@@ -306,6 +306,7 @@ def run_eval_adaptive(
     *,
     gate: threading.Semaphore | None = None,
     isolate: bool = False,
+    model: str | None = None,
 ) -> list[EvalRun]:
     """Run trials in optimistic concurrent batches, stopping once the verdict
     is fixed.
@@ -316,12 +317,13 @@ def run_eval_adaptive(
     runs and spends as few as `BATCH_FLOOR` when a clean streak settles every
     check, over however many rounds the outcomes require.
 
-    `gate` and `isolate` are forwarded to `run_claude_batch`: the shared
-    semaphore caps total live calls across this eval's batches and any other
-    evals driven in parallel, and `isolate` runs every trial in its own
-    throwaway copy of `repo_root`. Batches within one eval still run as
-    sequential rounds (each round's verdict decides the next), so concurrency
-    comes from the trials in a round plus evals overlapping above this layer.
+    `gate`, `isolate`, and `model` are forwarded to `run_claude_batch`: the
+    shared semaphore caps total live calls across this eval's batches and any
+    other evals driven in parallel; `isolate` runs every trial in its own
+    throwaway copy of `repo_root`; `model`, when given, selects a specific
+    model for all trials. Batches within one eval still run as sequential
+    rounds (each round's verdict decides the next), so concurrency comes from
+    the trials in a round plus evals overlapping above this layer.
     """
     runs: list[EvalRun] = []
     batch = next_batch_size(runs, checks, max_trials, target)
@@ -334,6 +336,7 @@ def run_eval_adaptive(
                 batch,
                 gate=gate,
                 isolate=isolate,
+                model=model,
             )
         )
         batch = next_batch_size(runs, checks, max_trials, target)

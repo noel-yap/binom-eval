@@ -32,6 +32,47 @@ class TestStrippedEnv:
         assert env.get("OTHER") == "v"
 
 
+
+class TestCliVersion:
+    def test_returns_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import subprocess
+
+        monkeypatch.setattr(
+            subprocess,
+            'run',
+            lambda *a, **kw: type('R', (), {'stdout': '1.2.3\n'})(),
+        )
+        from binom_eval.runner import cli_version
+
+        assert cli_version() == '1.2.3'
+
+    def test_returns_empty_when_not_found(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import subprocess
+
+        def raise_fnf(*a: object, **kw: object) -> None:
+            raise FileNotFoundError
+
+        monkeypatch.setattr(subprocess, 'run', raise_fnf)
+        from binom_eval.runner import cli_version
+
+        assert cli_version() == ''
+
+    def test_returns_empty_on_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import subprocess
+
+        def raise_timeout(*a: object, **kw: object) -> None:
+            raise subprocess.TimeoutExpired(cmd='claude', timeout=10)
+
+        monkeypatch.setattr(subprocess, 'run', raise_timeout)
+        from binom_eval.runner import cli_version
+
+        assert cli_version() == ''
+
+
 class TestRunClaudeBatch:
     def test_runs_count_times_and_stamps_eval_id(
         self, monkeypatch: pytest.MonkeyPatch
@@ -42,6 +83,7 @@ class TestRunClaudeBatch:
             skill_name: str,
             *,
             isolate: bool = False,
+            model: str | None = None,
         ) -> EvalRun:
             return EvalRun(
                 eval_id="", prompt=prompt, skill_invoked=True, assistant_text=""
@@ -67,6 +109,7 @@ class TestRunClaudeBatch:
             skill_name: str,
             *,
             isolate: bool = False,
+            model: str | None = None,
         ) -> EvalRun:
             with lock:
                 live["now"] += 1
