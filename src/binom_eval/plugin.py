@@ -10,6 +10,7 @@ by the Beta-binomial verdict in `binom_eval.grading`.
 
 from __future__ import annotations
 
+import os
 import shutil
 import threading
 from collections.abc import Callable
@@ -25,7 +26,7 @@ from binom_eval.grading import (
     load_evals,
     run_eval_adaptive,
 )
-from binom_eval.runner import cli_version
+from binom_eval.runner import cli_version, validate_model
 from binom_eval.stream_json import EvalRun
 
 # Budget ceiling: the most trials any single eval will ever run. A verdict
@@ -193,13 +194,31 @@ def make_eval_runs_fixture(
 
     @pytest.fixture(scope="session")
     def eval_runs(pytestconfig: pytest.Config) -> dict[str, list[EvalRun]]:
+        """Run live evals and return parsed runs keyed by eval ID.
+
+        Requires `claude` CLI on PATH and `ANTHROPIC_API_KEY` set; fails fast
+        with a clear message when either is absent, since evals run with
+        `--bare` and authenticate only via that key.
+        """
         if shutil.which("claude") is None:
-            pytest.skip("claude CLI not found on PATH")
+            pytest.fail("claude CLI not found on PATH", pytrace=False)
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            pytest.fail(
+                "ANTHROPIC_API_KEY is not set; live evals run with isolated "
+                "settings (`--bare`) and authenticate only via that key.",
+                pytrace=False,
+            )
         max_trials = pytestconfig.getoption("--live-eval-max-trials")
         target = pytestconfig.getoption("--live-eval-target-rate")
         concurrency = pytestconfig.getoption("--live-eval-concurrency")
         isolate = pytestconfig.getoption("--live-eval-isolate")
         model = pytestconfig.getoption("--live-eval-model")
+        error = validate_model(model)
+        if error is not None:
+            pytest.fail(
+                f"--live-eval-model {model!r} is unusable: {error}",
+                pytrace=False,
+            )
         gate = threading.Semaphore(concurrency)
         evals = load_evals(evals_path, assertion_handlers)
 

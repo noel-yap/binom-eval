@@ -82,6 +82,7 @@ from binom_eval.runner import (
     run_claude,
     run_claude_batch,
     stripped_env,
+    validate_model,
 )
 from binom_eval.stream_json import (
     EvalRun,
@@ -140,6 +141,7 @@ __all__ = [
     "run_claude",
     "run_claude_batch",
     "stripped_env",
+    "validate_model",
     # grading
     "BATCH_FLOOR",
     "FAIL_THRESHOLD",

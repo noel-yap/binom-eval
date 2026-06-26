@@ -18,6 +18,7 @@ to the tree cannot clobber a concurrent run.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import shutil
 import subprocess
@@ -82,6 +83,71 @@ def cli_version() -> str:
         return result.stdout.strip()
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return ""
+
+
+def _model_probe_rejected(stdout: str) -> str | None:
+    """Verdict for a model probe's stream-json `stdout`, with no I/O.
+
+    Returns the CLI's human-readable error message when the run reports the
+    model is unusable -- `error == "model_not_found"` on any event, or an
+    `is_error` result carrying HTTP 404 -- and None otherwise. Kept pure so
+    the parsing is unit-testable without spawning `claude`.
+    """
+    message: str | None = None
+    rejected = False
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("error") == "model_not_found":
+            rejected = True
+        if event.get("type") == "result" and event.get("is_error"):
+            if event.get("api_error_status") == 404:
+                rejected = True
+            message = event.get("result") or message
+    return (message or "model not found") if rejected else None
+
+
+def validate_model(model: str, timeout: int = 30) -> str | None:
+    """Confirm the `claude` CLI can use `model`; return an error or None.
+
+    Runs one trivial `claude -p` probe with `--model model`. Returns None when
+    the model is usable, or the CLI's error message when the model does not
+    exist or the account cannot access it (the CLI reports `model_not_found` /
+    HTTP 404). The probe is cheap: a bad model is rejected in ~1s at zero cost,
+    a good one costs a single short turn. Transport failures (CLI absent,
+    timeout) return None so a flaky probe never blocks a run that might
+    otherwise succeed -- the real trials will surface any genuine outage.
+    """
+    cmd = [
+        "claude",
+        "-p",
+        "ok",
+        "--model",
+        model,
+        "--bare",
+        "--setting-sources",
+        "",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=stripped_env(),
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    return _model_probe_rejected(proc.stdout)
 
 
 @contextlib.contextmanager
