@@ -103,7 +103,8 @@ class _StubConfig:
 class TestMakeEvalRunsFixture:
     """The session-scoped fixture the factory builds.
 
-    The wrapped fixture skips when the `claude` CLI is absent, and otherwise
+    The wrapped fixture fails fast when the `claude` CLI is absent or
+    ANTHROPIC_API_KEY is unset, and otherwise
     runs each eval through `run_eval_adaptive`, returning the runs keyed by
     eval id. `run_eval_adaptive` and `load_evals` are stubbed so no real
     model call happens.
@@ -116,16 +117,28 @@ class TestMakeEvalRunsFixture:
         )
         return fixture.__wrapped__
 
-    def test_skips_when_claude_cli_is_absent(
+    def test_fails_when_claude_cli_is_absent(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
         monkeypatch.setattr(plugin.shutil, "which", lambda _name: None)
-        with pytest.raises(pytest.skip.Exception):
+        with pytest.raises(pytest.fail.Exception, match="claude CLI not found"):
+            self._fixture_fn()(_StubConfig(21, 2.0 / 3.0))
+
+    def test_fails_when_api_key_is_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            plugin.shutil, "which", lambda _name: "/usr/bin/claude"
+        )
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with pytest.raises(pytest.fail.Exception, match="ANTHROPIC_API_KEY"):
             self._fixture_fn()(_StubConfig(21, 2.0 / 3.0))
 
     def test_builds_runs_keyed_by_eval_id_when_cli_present(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
         monkeypatch.setattr(
             plugin.shutil, "which", lambda _name: "/usr/bin/claude"
         )
@@ -162,12 +175,19 @@ class TestMakeEvalRunsFixture:
             ]
 
         monkeypatch.setattr(plugin, "run_eval_adaptive", fake_adaptive)
+        # The pre-flight model probe is covered in test_runner; stub it
+        # here so the fixture-wiring test makes no live `claude` call.
+        monkeypatch.setattr(plugin, "validate_model", lambda _model: None)
 
         result = self._fixture_fn()(_StubConfig(21, 2.0 / 3.0))
 
         assert set(result.keys()) == {"e1", "e2"}
-        assert all(len(runs) == 1 and runs[0].eval_id == eid for eid, runs in result.items())
-        # Evals are driven through a thread pool, so the recorded order is not
-        # guaranteed; assert on the set of ids and the shared params instead.
-        assert {eval_id for eval_id, *_ in calls} == {"e1", "e2"}
-        assert all(tuple(rest) == (21, 2.0 / 3.0) for _, *rest in calls)
+        assert len(result["e1"]) == 1
+        assert result["e1"][0].eval_id == "e1"
+        assert len(result["e2"]) == 1
+        assert result["e2"][0].eval_id == "e2"
+        # Evals are driven through a thread pool so recorded order is not
+        # guaranteed; sort by id before asserting the shared params.
+        sorted_calls = sorted(calls, key=lambda c: c[0])
+        assert sorted_calls[0] == ("e1", 21, 2.0 / 3.0)
+        assert sorted_calls[1] == ("e2", 21, 2.0 / 3.0)
