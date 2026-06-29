@@ -16,6 +16,10 @@ events rather than `tool_use` blocks nested in the assistant message, so
 harness's `{"type": "tool_use", "name", "input"}` convention. That lets the
 existing `EvalRun` predicates (`tool_invoked`, `agent_invoked`,
 `skill_invoked_in_tools`) work unchanged against a Cursor run.
+
+Cursor loads skills by reading `{skill_name}/SKILL.md` via `readToolCall`
+rather than emitting Claude Code's `Skill` tool, so skill invocation is also
+detected when a translated Read targets that path.
 """
 
 from __future__ import annotations
@@ -77,6 +81,18 @@ def _cursor_tool_use(event: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _cursor_skill_read_hit(block: dict[str, Any], skill_name: str) -> bool:
+    """True when Cursor read a skill's SKILL.md via `readToolCall`.
+
+    Cursor discovers skills at startup and pulls instructions on demand by
+    reading `{skill_name}/SKILL.md` from project or user skill directories.
+    """
+    if block.get("name") != "Read":
+        return False
+    path = str(block.get("input", {}).get("path", "")).replace(chr(92), "/")
+    return f"/{skill_name}/SKILL.md" in path
+
+
 def parse_cursor_stream_json(
     stdout: str, skill_name: str
 ) -> tuple[bool, str, list[dict[str, Any]], str]:
@@ -103,7 +119,8 @@ def parse_cursor_stream_json(
         )
     )
     skill_invoked = skill_invoked or any(
-        _is_skill_hit(block, skill_name) for block in tool_uses
+        _is_skill_hit(block, skill_name) or _cursor_skill_read_hit(block, skill_name)
+        for block in tool_uses
     )
     return skill_invoked, text, tool_uses, model
 

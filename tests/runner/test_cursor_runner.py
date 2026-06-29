@@ -20,6 +20,7 @@ from binom_eval import EvalRun
 from binom_eval.runner import cursor_runner
 from binom_eval.runner.cursor_runner import (
     CursorRunner,
+    _cursor_skill_read_hit,
     _cursor_tool_use,
     _is_started_tool_call,
     parse_cursor_stream_json,
@@ -113,6 +114,46 @@ _READ_COMPLETED = (
 )
 
 
+
+class TestCursorSkillReadHit:
+    def test_true_for_skill_md_read(self) -> None:
+        block = {
+            "type": "tool_use",
+            "name": "Read",
+            "input": {
+                "path": "/Users/me/.claude/skills/dependency-injection/SKILL.md",
+            },
+        }
+        assert _cursor_skill_read_hit(block, "dependency-injection")
+
+    def test_true_for_project_cursor_skill_path(self) -> None:
+        block = {
+            "type": "tool_use",
+            "name": "Read",
+            "input": {
+                "path": "/repo/.cursor/skills/demo/SKILL.md",
+            },
+        }
+        assert _cursor_skill_read_hit(block, "demo")
+
+    def test_false_for_unrelated_read(self) -> None:
+        block = {
+            "type": "tool_use",
+            "name": "Read",
+            "input": {"path": "README.md"},
+        }
+        assert not _cursor_skill_read_hit(block, "demo")
+
+    def test_false_for_other_skill(self) -> None:
+        block = {
+            "type": "tool_use",
+            "name": "Read",
+            "input": {"path": "/skills/other/SKILL.md"},
+        }
+        assert not _cursor_skill_read_hit(block, "demo")
+
+
+
 class TestParseCursorStreamJson:
     def test_aggregates_text_and_model_and_translates_tools(self) -> None:
         stdout = _event_lines(
@@ -148,6 +189,16 @@ class TestParseCursorStreamJson:
             '[{"type":"tool_use","name":"Skill","input":{"skill":"demo"}}]}}'
         )
         stdout = _event_lines(assistant_skill)
+        skill, _text, _tools, _model = parse_cursor_stream_json(stdout, "demo")
+        assert skill is True
+
+    def test_skill_detected_via_read_of_skill_md(self) -> None:
+        skill_read = (
+            '{"type":"tool_call","subtype":"started",'
+            '"tool_call":{"readToolCall":{"args":{"path":'
+            '"/Users/me/.claude/skills/demo/SKILL.md"}}}}'
+        )
+        stdout = _event_lines(_ASSISTANT_HI, skill_read)
         skill, _text, _tools, _model = parse_cursor_stream_json(stdout, "demo")
         assert skill is True
 
