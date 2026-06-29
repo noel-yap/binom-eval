@@ -40,7 +40,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from binom_eval.runner import run_claude_batch
+from binom_eval.runner import Runner, run_claude_batch
 from binom_eval.stream_json import EvalRun
 
 # Beta(1, 1) prior: uniform over theta, i.e. no prior opinion on the rate.
@@ -306,7 +306,8 @@ def run_eval_adaptive(
     *,
     gate: threading.Semaphore | None = None,
     isolate: bool = False,
-    model: str | None = None,
+    model: str,
+    runner: Runner | None = None,
 ) -> list[EvalRun]:
     """Run trials in optimistic concurrent batches, stopping once the verdict
     is fixed.
@@ -317,13 +318,14 @@ def run_eval_adaptive(
     runs and spends as few as `BATCH_FLOOR` when a clean streak settles every
     check, over however many rounds the outcomes require.
 
-    `gate`, `isolate`, and `model` are forwarded to `run_claude_batch`: the
-    shared semaphore caps total live calls across this eval's batches and any
-    other evals driven in parallel; `isolate` runs every trial in its own
-    throwaway copy of `repo_root`; `model`, when given, selects a specific
-    model for all trials. Batches within one eval still run as sequential
-    rounds (each round's verdict decides the next), so concurrency comes from
-    the trials in a round plus evals overlapping above this layer.
+    `gate`, `isolate`, `model`, and `runner` are forwarded to
+    `run_claude_batch`: the shared semaphore caps total live calls across this
+    eval's batches and any other evals driven in parallel; `isolate` runs
+    every trial in its own throwaway copy of `repo_root`; `model` selects the
+    specific model used for all trials; `runner` selects the backend (default
+    `claude -p`). Batches within one eval still run as sequential rounds (each
+    round's verdict decides the next), so concurrency comes from the trials in
+    a round plus evals overlapping above this layer.
     """
     runs: list[EvalRun] = []
     batch = next_batch_size(runs, checks, max_trials, target)
@@ -337,6 +339,7 @@ def run_eval_adaptive(
                 gate=gate,
                 isolate=isolate,
                 model=model,
+                runner=runner,
             )
         )
         batch = next_batch_size(runs, checks, max_trials, target)
