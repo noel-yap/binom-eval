@@ -10,8 +10,6 @@ by the Beta-binomial verdict in `binom_eval.grading`.
 
 from __future__ import annotations
 
-import os
-import shutil
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -26,7 +24,7 @@ from binom_eval.grading import (
     load_evals,
     run_eval_adaptive,
 )
-from binom_eval.runner import cli_version, validate_model
+from binom_eval.runner import resolve_runner
 from binom_eval.stream_json import EvalRun
 
 # Budget ceiling: the most trials any single eval will ever run. A verdict
@@ -53,25 +51,25 @@ DEFAULT_CONCURRENCY = 5
 # not red-flagging working skills over catching mildly-broken (~0.6) ones.
 DEFAULT_TARGET_RATE = 3.0 / 5.0
 
-# Shorthand alias recognised by the claude CLI; resolves to the latest Haiku.
-DEFAULT_MODEL = "haiku"
-
-
 class _SessionReporter:
-    """Pytest plugin that surfaces the claude CLI version and model in output.
+    """Pytest plugin that surfaces the selected backend, CLI version, and
+    model in output.
 
     Registered programmatically in `pytest_configure` so external conftest.py
-    files do not need to re-export any additional hooks. The CLI version is
-    captured once at session start via `cli_version()`; the model is set by
-    `make_eval_runs_fixture` after the runs complete, read from the actual
-    model field in the stream-json response.
+    files do not need to re-export any additional hooks. The backend label and
+    CLI version are captured once at session start from the runner resolved
+    from `--live-eval-model`; the model is set by `make_eval_runs_fixture`
+    after the runs complete, read from the actual model field in the
+    stream-json response.
     """
 
     def __init__(self) -> None:
+        self._backend: str = ""
         self._version: str = ""
         self._model: str = ""
 
-    def set_version(self, version: str) -> None:
+    def set_backend(self, backend: str, version: str) -> None:
+        self._backend = backend
         self._version = version
 
     def set_model(self, model: str) -> None:
@@ -79,7 +77,7 @@ class _SessionReporter:
 
     def pytest_report_header(self) -> list[str]:
         if self._version:
-            return [f"claude CLI: {self._version}"]
+            return [f"{self._backend} CLI: {self._version}"]
         return []
 
     def pytest_terminal_summary(
@@ -91,7 +89,8 @@ class _SessionReporter:
         if self._model:
             parts.append(f"model {self._model}")
         if parts:
-            terminalreporter.write_sep("-", "claude: " + "  ".join(parts))
+            label = self._backend or "live-eval"
+            terminalreporter.write_sep("-", f"{label}: " + "  ".join(parts))
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -150,23 +149,38 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--live-eval-model",
         action="store",
         type=str,
-        default=DEFAULT_MODEL,
+        default=None,
         help=(
-            "Model to pass as `--model` to every `claude -p` trial "
-            f"(e.g. claude-haiku-4-5-20251001). Default: {DEFAULT_MODEL}."
+            "Required for live evals. Backend and model for every trial, as "
+            "`backend:model` (e.g. claude:claude-haiku-4-5-20251001 or "
+            "cursor:sonnet-4.5). The `backend:` prefix is mandatory so each "
+            "run targets a named harness. Known backends: claude, cursor."
         ),
     )
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Register the `live_eval` marker and the session reporter plugin."""
+    """Register the `live_eval` marker and the session reporter plugin.
+
+    The reporter's backend label and CLI version come from the runner
+    resolved from `--live-eval-model`. Resolution is best-effort here: a bad
+    spec leaves the version blank and is reported as a clean failure by the
+    `eval_runs` fixture when live evals actually run, rather than crashing
+    collection for unrelated (e.g. unit) test runs.
+    """
     config.addinivalue_line(
         "markers",
-        "live_eval: end-to-end test that invokes `claude -p` (real model "
+        "live_eval: end-to-end test that invokes a live agent CLI (real model "
         "call). Select with `-m live_eval`; exclude with `-m 'not live_eval'`.",
     )
     reporter = _SessionReporter()
-    reporter.set_version(cli_version())
+    try:
+        backend, _model, runner = resolve_runner(
+            config.getoption("--live-eval-model")
+        )
+        reporter.set_backend(backend, runner.version())
+    except ValueError:
+        pass
     config.pluginmanager.register(reporter, "binom_eval_reporter")
 
 
@@ -196,27 +210,29 @@ def make_eval_runs_fixture(
     def eval_runs(pytestconfig: pytest.Config) -> dict[str, list[EvalRun]]:
         """Run live evals and return parsed runs keyed by eval ID.
 
-        Requires `claude` CLI on PATH and `ANTHROPIC_API_KEY` set; fails fast
-        with a clear message when either is absent, since evals run with
-        `--bare` and authenticate only via that key.
+        Resolves the backend and model from `--live-eval-model`
+        (`backend:model`, bare model = claude), then fails fast with a clear
+        message when the spec is malformed, the backend's CLI/credentials are
+        missing (`runner.preflight()`), or the model is unusable
+        (`runner.validate_model`) -- so a bad setup never silently burns live
+        trials.
         """
-        if shutil.which("claude") is None:
-            pytest.fail("claude CLI not found on PATH", pytrace=False)
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            pytest.fail(
-                "ANTHROPIC_API_KEY is not set; live evals run with isolated "
-                "settings (`--bare`) and authenticate only via that key.",
-                pytrace=False,
-            )
+        spec = pytestconfig.getoption("--live-eval-model")
+        try:
+            _backend, model, runner = resolve_runner(spec)
+        except ValueError as exc:
+            pytest.fail(str(exc), pytrace=False)
+        preflight_error = runner.preflight()
+        if preflight_error is not None:
+            pytest.fail(preflight_error, pytrace=False)
         max_trials = pytestconfig.getoption("--live-eval-max-trials")
         target = pytestconfig.getoption("--live-eval-target-rate")
         concurrency = pytestconfig.getoption("--live-eval-concurrency")
         isolate = pytestconfig.getoption("--live-eval-isolate")
-        model = pytestconfig.getoption("--live-eval-model")
-        error = validate_model(model)
-        if error is not None:
+        model_error = runner.validate_model(model)
+        if model_error is not None:
             pytest.fail(
-                f"--live-eval-model {model!r} is unusable: {error}",
+                f"--live-eval-model {spec!r} is unusable: {model_error}",
                 pytrace=False,
             )
         gate = threading.Semaphore(concurrency)
@@ -234,6 +250,7 @@ def make_eval_runs_fixture(
                 gate=gate,
                 isolate=isolate,
                 model=model,
+                runner=runner,
             )
 
         # Drive the evals concurrently; the shared `gate` -- not the worker

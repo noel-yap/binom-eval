@@ -13,8 +13,9 @@ only as many trials as the verdict needs. The package is split by concern:
     checks).
   * `stream_json` -- the `EvalRun` dataclass and `parse_stream_json`, which
     turn one `claude -p` run's stdout into an `EvalRun`.
-  * `runner` -- the subprocess/env layer: `run_claude`, the concurrent
-    `run_claude_batch` (throttled by a shared semaphore), and
+  * `runner` -- the subprocess/env layer: the `Runner` backends
+    (`ClaudeRunner`, `CursorRunner`) selected via `resolve_runner`, the
+    concurrent `run_claude_batch` (throttled by a shared semaphore), and
     `isolated_workdir` for per-run filesystem isolation.
   * `grading` -- the Beta-binomial verdict (`posterior_pass_prob`,
     `eval_passed`), the adaptive trial driver (`next_batch_size`,
@@ -65,7 +66,6 @@ from binom_eval.grading import (
 from binom_eval.plugin import (
     DEFAULT_CONCURRENCY,
     DEFAULT_MAX_TRIALS,
-    DEFAULT_MODEL,
     DEFAULT_TARGET_RATE,
     live_eval_target_rate,
     make_eval_runs_fixture,
@@ -74,11 +74,16 @@ from binom_eval.plugin import (
 )
 from binom_eval.suite import bind_eval_runs_fixture, register_live_eval_tests
 from binom_eval.runner import (
+    BACKENDS,
     DEFAULT_TIMEOUT_SECONDS,
     ISOLATION_IGNORE,
     NESTED_SESSION_MARKERS,
+    ClaudeRunner,
+    CursorRunner,
+    Runner,
     cli_version,
     isolated_workdir,
+    resolve_runner,
     run_claude,
     run_claude_batch,
     stripped_env,
@@ -133,11 +138,16 @@ __all__ = [
     "skill_was_invoked",
     "tool_invoked",
     # runner
+    "BACKENDS",
     "DEFAULT_TIMEOUT_SECONDS",
     "ISOLATION_IGNORE",
     "NESTED_SESSION_MARKERS",
+    "ClaudeRunner",
+    "CursorRunner",
+    "Runner",
     "cli_version",
     "isolated_workdir",
+    "resolve_runner",
     "run_claude",
     "run_claude_batch",
     "stripped_env",
@@ -164,7 +174,6 @@ __all__ = [
     # plugin
     "DEFAULT_CONCURRENCY",
     "DEFAULT_MAX_TRIALS",
-    "DEFAULT_MODEL",
     "DEFAULT_TARGET_RATE",
     "live_eval_target_rate",
     "make_eval_runs_fixture",

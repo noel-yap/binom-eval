@@ -421,7 +421,8 @@ class TestRunEvalAdaptive:
             *,
             gate: object = None,
             isolate: bool = False,
-            model: str | None = None,
+            model: str,
+            runner: object = None,
         ) -> list[EvalRun]:
             chunk = scripted[state["i"] : state["i"] + count]
             state["i"] += count
@@ -435,6 +436,7 @@ class TestRunEvalAdaptive:
             max_trials=21,
             target=TARGET,
             checks=[_skill_check],
+            model="m",
         )
         # First batch is the floor (3); a clean streak then PASS-locks, so it
         # stops well short of the 21-trial budget.
@@ -453,7 +455,8 @@ class TestRunEvalAdaptive:
             *,
             gate: object = None,
             isolate: bool = False,
-            model: str | None = None,
+            model: str,
+            runner: object = None,
         ) -> list[EvalRun]:
             return _runs(*([False] * count))
 
@@ -465,6 +468,7 @@ class TestRunEvalAdaptive:
             max_trials=21,
             target=TARGET,
             checks=[_skill_check],
+            model="m",
         )
         assert len(runs) == BATCH_FLOOR
 

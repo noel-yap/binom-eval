@@ -1,8 +1,11 @@
-"""Unit tests for `binom_eval.runner` (env scrubbing + batched runs).
+"""Unit tests for the `binom_eval.runner` package layer.
 
-`run_claude` itself spawns a real `claude -p` subprocess, so it is exercised
-only through the live evals; here `run_claude_batch` is tested with the
-per-call runner monkeypatched out.
+Covers the backend-agnostic pieces that live in the package root: env
+scrubbing (`stripped_env`), the per-run workdir (`isolated_workdir`), the
+pure model-probe parser (`_model_probe_rejected`), the `backend:model` spec
+parser (`resolve_runner`), and the concurrent `run_claude_batch` driver. The
+`ClaudeRunner` backend itself is tested in `test_claude_runner.py`;
+`run_claude_batch` is exercised here against an injected fake `Runner`.
 """
 
 from __future__ import annotations
@@ -10,11 +13,85 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import binom_eval
-from binom_eval import EvalRun, isolated_workdir, stripped_env
+from binom_eval import (
+    ClaudeRunner,
+    CursorRunner,
+    EvalRun,
+    Runner,
+    isolated_workdir,
+    resolve_runner,
+    stripped_env,
+)
+
+
+class _FakeRunner(Runner):
+    """A `Runner` whose `run` delegates to an injected callable.
+
+    Lets `run_claude_batch` be exercised against a backend that records or
+    throttles calls without spawning any CLI; `version`/`preflight`/
+    `validate_model` are unused by the batch driver and stubbed inert.
+    """
+
+    def __init__(self, run_fn: Any) -> None:
+        self._run_fn = run_fn
+
+    def version(self) -> str:
+        return ""
+
+    def preflight(self) -> str | None:
+        return None
+
+    def validate_model(self, model: str, timeout: int = 30) -> str | None:
+        return None
+
+    def run(
+        self,
+        prompt: str,
+        repo_root: Path,
+        skill_name: str,
+        timeout: int = 300,
+        *,
+        isolate: bool = False,
+        model: str,
+    ) -> EvalRun:
+        return self._run_fn(
+            prompt, repo_root, skill_name, isolate=isolate, model=model
+        )
+
+
+class TestResolveRunner:
+    def test_bare_model_without_prefix_raises(self) -> None:
+        with pytest.raises(ValueError, match="must be 'backend:model'"):
+            resolve_runner("haiku")
+
+    def test_missing_spec_raises(self) -> None:
+        with pytest.raises(ValueError, match="must be 'backend:model'"):
+            resolve_runner(None)
+
+    def test_claude_prefix_strips_to_model(self) -> None:
+        backend, model, runner = resolve_runner("claude:claude-opus-4-8")
+        assert backend == "claude"
+        assert model == "claude-opus-4-8"
+        assert isinstance(runner, ClaudeRunner)
+
+    def test_cursor_prefix_selects_cursor_backend(self) -> None:
+        backend, model, runner = resolve_runner("cursor:sonnet-4.5")
+        assert backend == "cursor"
+        assert model == "sonnet-4.5"
+        assert isinstance(runner, CursorRunner)
+
+    def test_unknown_backend_prefix_raises(self) -> None:
+        with pytest.raises(ValueError, match="unknown eval backend 'gpt'"):
+            resolve_runner("gpt:4o")
+
+    def test_empty_model_raises(self) -> None:
+        with pytest.raises(ValueError, match="empty model"):
+            resolve_runner("claude:")
 
 
 class TestStrippedEnv:
@@ -32,74 +109,33 @@ class TestStrippedEnv:
         assert env.get("OTHER") == "v"
 
 
-
-class TestCliVersion:
-    def test_returns_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import subprocess
-
-        monkeypatch.setattr(
-            subprocess,
-            'run',
-            lambda *a, **kw: type('R', (), {'stdout': '1.2.3\n'})(),
-        )
-        from binom_eval.runner import cli_version
-
-        assert cli_version() == '1.2.3'
-
-    def test_returns_empty_when_not_found(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import subprocess
-
-        def raise_fnf(*a: object, **kw: object) -> None:
-            raise FileNotFoundError
-
-        monkeypatch.setattr(subprocess, 'run', raise_fnf)
-        from binom_eval.runner import cli_version
-
-        assert cli_version() == ''
-
-    def test_returns_empty_on_timeout(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import subprocess
-
-        def raise_timeout(*a: object, **kw: object) -> None:
-            raise subprocess.TimeoutExpired(cmd='claude', timeout=10)
-
-        monkeypatch.setattr(subprocess, 'run', raise_timeout)
-        from binom_eval.runner import cli_version
-
-        assert cli_version() == ''
-
-
 class TestRunClaudeBatch:
-    def test_runs_count_times_and_stamps_eval_id(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_runs_count_times_and_stamps_eval_id(self) -> None:
         def fake_run(
             prompt: str,
             repo_root: Path,
             skill_name: str,
             *,
             isolate: bool = False,
-            model: str | None = None,
+            model: str,
         ) -> EvalRun:
             return EvalRun(
                 eval_id="", prompt=prompt, skill_invoked=True, assistant_text=""
             )
 
-        monkeypatch.setattr(binom_eval.runner, "run_claude", fake_run)
         runs = binom_eval.run_claude_batch(
-            {"id": "e1", "prompt": "p"}, Path("."), "demo", count=3
+            {"id": "e1", "prompt": "p"},
+            Path("."),
+            "demo",
+            count=3,
+            model="m",
+            runner=_FakeRunner(fake_run),
         )
         assert len(runs) == 3
         assert all(run.eval_id == "e1" for run in runs)
         assert all(run.prompt == "p" for run in runs)
 
-    def test_gate_caps_concurrent_runs(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_gate_caps_concurrent_runs(self) -> None:
         lock = threading.Lock()
         live = {"now": 0, "max": 0}
 
@@ -109,7 +145,7 @@ class TestRunClaudeBatch:
             skill_name: str,
             *,
             isolate: bool = False,
-            model: str | None = None,
+            model: str,
         ) -> EvalRun:
             with lock:
                 live["now"] += 1
@@ -123,13 +159,14 @@ class TestRunClaudeBatch:
                 eval_id="", prompt=prompt, skill_invoked=True, assistant_text=""
             )
 
-        monkeypatch.setattr(binom_eval.runner, "run_claude", fake_run)
         runs = binom_eval.run_claude_batch(
             {"id": "e1", "prompt": "p"},
             Path("."),
             "demo",
             count=6,
             gate=threading.Semaphore(2),
+            model="m",
+            runner=_FakeRunner(fake_run),
         )
         assert len(runs) == 6
         assert live["max"] <= 2
@@ -199,19 +236,6 @@ class TestModelProbeRejected:
 
         assert _model_probe_rejected("\n  \nnot json\n") is None
 
-    def test_validate_model_returns_none_when_cli_absent(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import subprocess
-
-        def raise_fnf(*a: object, **kw: object) -> None:
-            raise FileNotFoundError
-
-        monkeypatch.setattr(subprocess, 'run', raise_fnf)
-        from binom_eval.runner import validate_model
-
-        assert validate_model("anything") is None
-
     # --- additional probe-parser scenarios (independent conditions) ---
     # An is_error result carrying HTTP 404 but no `model_not_found` marker.
     _BAD_404_ONLY = (
@@ -260,43 +284,3 @@ class TestModelProbeRejected:
         from binom_eval.runner import _model_probe_rejected
 
         assert _model_probe_rejected(self._IS_ERROR_NOT_RESULT) is None
-
-    def test_validate_model_reports_bad_model_from_stdout(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import subprocess
-
-        monkeypatch.setattr(
-            subprocess, 'run',
-            lambda *a, **kw: type('R', (), {'stdout': self._BAD})(),
-        )
-        from binom_eval.runner import validate_model
-
-        msg = validate_model("bad")
-        assert msg is not None and "may not exist" in msg
-
-    def test_validate_model_accepts_good_model_from_stdout(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import subprocess
-
-        monkeypatch.setattr(
-            subprocess, 'run',
-            lambda *a, **kw: type('R', (), {'stdout': self._GOOD})(),
-        )
-        from binom_eval.runner import validate_model
-
-        assert validate_model("haiku") is None
-
-    def test_validate_model_returns_none_on_timeout(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import subprocess
-
-        def raise_timeout(*a: object, **kw: object) -> None:
-            raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
-
-        monkeypatch.setattr(subprocess, 'run', raise_timeout)
-        from binom_eval.runner import validate_model
-
-        assert validate_model("haiku") is None

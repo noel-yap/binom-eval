@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from binom_eval import DEFAULT_MAX_TRIALS, DEFAULT_MODEL, DEFAULT_TARGET_RATE, plugin
+from binom_eval import DEFAULT_MAX_TRIALS, DEFAULT_TARGET_RATE, plugin
 from binom_eval.stream_json import EvalRun
 from binom_eval.grading import BATCH_FLOOR, FAIL_THRESHOLD, PASS_THRESHOLD
 from binom_eval.plugin import make_eval_runs_fixture, pytest_addoption
@@ -50,9 +50,11 @@ class TestPytestAddOption:
         assert opt["default"] == DEFAULT_TARGET_RATE
         assert opt["type"] is float
 
-    def test_model_defaults_to_constant_and_is_str(self) -> None:
+    def test_model_has_no_default_and_is_str(self) -> None:
+        # No default: the `backend:` prefix is mandatory, so a live run must
+        # name its harness explicitly rather than fall back to one.
         opt = self._options()["--live-eval-model"]
-        assert opt["default"] == DEFAULT_MODEL
+        assert opt["default"] is None
         assert opt["type"] is str
 
 
@@ -85,7 +87,7 @@ class _StubConfig:
         target: float,
         concurrency: int = 4,
         isolate: bool = False,
-        model: str | None = None,
+        model: str | None = "claude:haiku",
     ) -> None:
         self._options = {
             "--live-eval-max-trials": max_trials,
@@ -100,14 +102,37 @@ class _StubConfig:
         return self._options[name]
 
 
+class _FakeRunner:
+    """A stand-in backend: canned `preflight`/`validate_model` verdicts.
+
+    The fixture only calls `preflight()` and `validate_model()` on the runner
+    before handing it to the (stubbed) driver, so this needs nothing more.
+    """
+
+    def __init__(
+        self,
+        preflight: str | None = None,
+        model_error: str | None = None,
+    ) -> None:
+        self._preflight = preflight
+        self._model_error = model_error
+
+    def preflight(self) -> str | None:
+        return self._preflight
+
+    def validate_model(self, _model: str, _timeout: int = 30) -> str | None:
+        return self._model_error
+
+
 class TestMakeEvalRunsFixture:
     """The session-scoped fixture the factory builds.
 
-    The wrapped fixture fails fast when the `claude` CLI is absent or
-    ANTHROPIC_API_KEY is unset, and otherwise
-    runs each eval through `run_eval_adaptive`, returning the runs keyed by
-    eval id. `run_eval_adaptive` and `load_evals` are stubbed so no real
-    model call happens.
+    The wrapped fixture fails fast on a malformed `--live-eval-model` spec,
+    when the backend's `preflight()` reports a missing CLI/credential, or when
+    `validate_model` rejects the model; otherwise it runs each eval through
+    `run_eval_adaptive`, returning the runs keyed by eval id. `resolve_runner`,
+    `run_eval_adaptive`, and `load_evals` are stubbed so no real model call
+    happens.
     """
 
     @staticmethod
@@ -117,30 +142,47 @@ class TestMakeEvalRunsFixture:
         )
         return fixture.__wrapped__
 
-    def test_fails_when_claude_cli_is_absent(
+    def test_fails_on_unknown_backend(self) -> None:
+        with pytest.raises(pytest.fail.Exception, match="unknown eval backend"):
+            self._fixture_fn()(_StubConfig(21, 2.0 / 3.0, model="gpt:4o"))
+
+    def test_fails_when_model_missing(self) -> None:
+        with pytest.raises(
+            pytest.fail.Exception, match="must be 'backend:model'"
+        ):
+            self._fixture_fn()(_StubConfig(21, 2.0 / 3.0, model=None))
+
+    def test_fails_when_prefix_omitted(self) -> None:
+        with pytest.raises(
+            pytest.fail.Exception, match="must be 'backend:model'"
+        ):
+            self._fixture_fn()(_StubConfig(21, 2.0 / 3.0, model="haiku"))
+
+    def test_fails_when_preflight_reports_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-        monkeypatch.setattr(plugin.shutil, "which", lambda _name: None)
+        runner = _FakeRunner(preflight="claude CLI not found on PATH")
+        monkeypatch.setattr(
+            plugin, "resolve_runner", lambda _spec: ("claude", "m", runner)
+        )
         with pytest.raises(pytest.fail.Exception, match="claude CLI not found"):
             self._fixture_fn()(_StubConfig(21, 2.0 / 3.0))
 
-    def test_fails_when_api_key_is_unset(
+    def test_fails_when_model_is_unusable(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        runner = _FakeRunner(model_error="model not found: bad")
         monkeypatch.setattr(
-            plugin.shutil, "which", lambda _name: "/usr/bin/claude"
+            plugin, "resolve_runner", lambda _spec: ("claude", "bad", runner)
         )
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        with pytest.raises(pytest.fail.Exception, match="ANTHROPIC_API_KEY"):
-            self._fixture_fn()(_StubConfig(21, 2.0 / 3.0))
+        with pytest.raises(pytest.fail.Exception, match="is unusable"):
+            self._fixture_fn()(_StubConfig(21, 2.0 / 3.0, model="claude:bad"))
 
     def test_builds_runs_keyed_by_eval_id_when_cli_present(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
         monkeypatch.setattr(
-            plugin.shutil, "which", lambda _name: "/usr/bin/claude"
+            plugin, "resolve_runner", lambda _spec: ("claude", "m", _FakeRunner())
         )
         monkeypatch.setattr(
             plugin,
@@ -162,7 +204,8 @@ class TestMakeEvalRunsFixture:
             *,
             gate: Any = None,
             isolate: bool = False,
-            model: str | None = None,
+            model: str,
+            runner: Any = None,
         ) -> list[EvalRun]:
             calls.append((item["id"], max_trials, target))
             return [
@@ -175,9 +218,6 @@ class TestMakeEvalRunsFixture:
             ]
 
         monkeypatch.setattr(plugin, "run_eval_adaptive", fake_adaptive)
-        # The pre-flight model probe is covered in test_runner; stub it
-        # here so the fixture-wiring test makes no live `claude` call.
-        monkeypatch.setattr(plugin, "validate_model", lambda _model: None)
 
         result = self._fixture_fn()(_StubConfig(21, 2.0 / 3.0))
 

@@ -20,8 +20,14 @@ pytest path/to/evals -m live_eval \
     --live-eval-max-trials 12 \
     --live-eval-concurrency 8 \
     --live-eval-isolate \
-    --live-eval-model claude-sonnet-4-6
+    --live-eval-model claude:claude-sonnet-4-6
 ```
+
+`--live-eval-model` is required for live evals and selects the backend and
+model as `backend:model` (known backends: `claude`, `cursor`). The `backend:`
+prefix is mandatory — a bare model with no prefix is an error — so each run
+targets a named harness. Each pytest run targets a single backend; run pytest
+once per backend to grade on both.
 
 ## Architecture
 
@@ -34,7 +40,7 @@ pytest path/to/evals -m live_eval \
 | `grading.py` | Beta-binomial math (`posterior_pass_prob`, `eval_passed`), adaptive trial driver (`run_eval_adaptive`, `next_batch_size`), grading rollups |
 | `plugin.py` | pytest integration: `--live-eval-*` CLI options, `live_eval` marker, `make_eval_runs_fixture` |
 | `suite.py` | Thin consumer wiring: `bind_eval_runs_fixture` (for `conftest.py`) and `register_live_eval_tests` (for `test_evals.py`) |
-| `runner.py` | subprocess layer: `run_claude`, `run_claude_batch` (throttled by a shared `threading.Semaphore`), `isolated_workdir` |
+| `runner/` | subprocess layer: the `Runner` backends (`ClaudeRunner`, `CursorRunner`) selected by `resolve_runner` from a `backend:model` spec, the throttled `run_claude_batch` (shared `threading.Semaphore`), per-backend `preflight`/`validate_model`, and `isolated_workdir` |
 | `stream_json.py` | `EvalRun` dataclass, `parse_stream_json` (parses `claude -p` stdout), skill/agent invocation predicates |
 | `text_utils.py` | Pure text/regex helpers for assertion modules |
 
