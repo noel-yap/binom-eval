@@ -315,6 +315,7 @@ def run_claude_batch(
     backend = runner if runner is not None else _default_runner
     eid = item["id"]
     prompt = item["prompt"]
+    prompt_input = item.get("prompt_input", "")
     limit: contextlib.AbstractContextManager[Any] = (
         gate if gate is not None else contextlib.nullcontext()
     )
@@ -329,6 +330,7 @@ def run_claude_batch(
         runs = list(pool.map(one, range(count)))
     for run in runs:
         run.eval_id = eid
+        run.prompt_input = prompt_input
     return runs
 
 

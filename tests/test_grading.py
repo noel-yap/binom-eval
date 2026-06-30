@@ -558,6 +558,7 @@ class TestExpandEvals:
         )
         evals = expand_evals(evals_path)
         assert evals[0]["prompt"] == "Refactor:\n```\nexport const x = 1;\n\n```\n"
+        assert evals[0]["prompt_input"] == "export const x = 1;\n"
 
     def test_load_evals_passes_through_literal_prompt(self, tmp_path: Path) -> None:
         evals_path = tmp_path / "evals.json"
