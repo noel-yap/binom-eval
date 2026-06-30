@@ -27,6 +27,7 @@ from binom_eval import (
     resolve_runner,
     stripped_env,
 )
+from binom_eval.runner import fake_home_env
 
 
 class _FakeRunner(Runner):
@@ -107,6 +108,33 @@ class TestStrippedEnv:
         assert "CLAUDE_CODE_SESSION_ID" not in env
         assert "CLAUDE_CODE_CHILD_SESSION" not in env
         assert env.get("OTHER") == "v"
+
+
+class TestFakeHomeEnv:
+    def test_repoints_home_to_a_fresh_empty_dir(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", "/real/home")
+        with fake_home_env() as env:
+            home = env["HOME"]
+            assert home != "/real/home"
+            assert env["USERPROFILE"] == home
+            home_path = Path(home)
+            assert home_path.is_dir()
+            assert not any(home_path.iterdir())
+        # The throwaway home is removed once the run ends.
+        assert not Path(home).exists()
+
+    def test_layers_on_stripped_env_credentials_preserved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CLAUDECODE", "1")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "ak")
+        monkeypatch.setenv("CURSOR_API_KEY", "ck")
+        with fake_home_env() as env:
+            assert "CLAUDECODE" not in env
+            assert env["ANTHROPIC_API_KEY"] == "ak"
+            assert env["CURSOR_API_KEY"] == "ck"
 
 
 class TestRunClaudeBatch:

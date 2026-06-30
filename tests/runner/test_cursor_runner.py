@@ -10,6 +10,7 @@ without invoking the CLI. `version` and `validate_model` stub only
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -116,50 +117,83 @@ _READ_COMPLETED = (
 
 
 class TestCursorSkillReadHit:
-    def test_true_for_skill_md_read(self) -> None:
+    def test_true_for_absolute_project_claude_skill_path(
+        self, tmp_path: Path
+    ) -> None:
+        skill_md = (
+            tmp_path / ".claude" / "skills" / "dependency-injection"
+            / "SKILL.md"
+        )
+        skill_md.parent.mkdir(parents=True)
+        skill_md.write_text("x")
         block = {
             "type": "tool_use",
             "name": "Read",
-            "input": {
-                "path": "/Users/me/.claude/skills/dependency-injection/SKILL.md",
-            },
+            "input": {"path": str(skill_md)},
         }
-        assert _cursor_skill_read_hit(block, "dependency-injection")
+        assert _cursor_skill_read_hit(
+            block, "dependency-injection", tmp_path
+        )
 
-    def test_true_for_project_cursor_skill_path(self) -> None:
+    def test_true_for_project_cursor_skill_path(self, tmp_path: Path) -> None:
+        skill_md = tmp_path / ".cursor" / "skills" / "demo" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True)
+        skill_md.write_text("x")
         block = {
             "type": "tool_use",
             "name": "Read",
-            "input": {
-                "path": "/repo/.cursor/skills/demo/SKILL.md",
-            },
+            "input": {"path": str(skill_md)},
         }
-        assert _cursor_skill_read_hit(block, "demo")
+        assert _cursor_skill_read_hit(block, "demo", tmp_path)
 
-    def test_false_for_unrelated_read(self) -> None:
+    def test_true_for_relative_project_skill_path(self, tmp_path: Path) -> None:
+        block = {
+            "type": "tool_use",
+            "name": "Read",
+            "input": {"path": "skills/demo/SKILL.md"},
+        }
+        assert _cursor_skill_read_hit(block, "demo", tmp_path)
+
+    def test_false_for_user_skill_root_outside_repo(
+        self, tmp_path: Path
+    ) -> None:
+        # A read of the same skill from ~/.claude/skills must not count: the
+        # eval grades only the project's own skill, never a global copy.
+        block = {
+            "type": "tool_use",
+            "name": "Read",
+            "input": {"path": "/Users/me/.claude/skills/demo/SKILL.md"},
+        }
+        assert not _cursor_skill_read_hit(block, "demo", tmp_path)
+
+    def test_false_for_unrelated_read(self, tmp_path: Path) -> None:
         block = {
             "type": "tool_use",
             "name": "Read",
             "input": {"path": "README.md"},
         }
-        assert not _cursor_skill_read_hit(block, "demo")
+        assert not _cursor_skill_read_hit(block, "demo", tmp_path)
 
-    def test_false_for_other_skill(self) -> None:
+    def test_false_for_other_skill(self, tmp_path: Path) -> None:
         block = {
             "type": "tool_use",
             "name": "Read",
-            "input": {"path": "/skills/other/SKILL.md"},
+            "input": {"path": "skills/other/SKILL.md"},
         }
-        assert not _cursor_skill_read_hit(block, "demo")
+        assert not _cursor_skill_read_hit(block, "demo", tmp_path)
 
 
 
 class TestParseCursorStreamJson:
-    def test_aggregates_text_and_model_and_translates_tools(self) -> None:
+    def test_aggregates_text_and_model_and_translates_tools(
+        self, tmp_path: Path
+    ) -> None:
         stdout = _event_lines(
             _SYSTEM_INIT, _ASSISTANT_HI, _READ_STARTED, _ASSISTANT_BYE
         )
-        skill, text, tools, model = parse_cursor_stream_json(stdout, "demo")
+        skill, text, tools, model = parse_cursor_stream_json(
+            stdout, "demo", tmp_path
+        )
         assert text == "hello\nbye"
         assert model == "GPT-5"
         assert tools == [
@@ -167,21 +201,29 @@ class TestParseCursorStreamJson:
         ]
         assert skill is False
 
-    def test_counts_only_started_tool_calls(self) -> None:
+    def test_counts_only_started_tool_calls(self, tmp_path: Path) -> None:
         stdout = _event_lines(_READ_STARTED, _READ_COMPLETED)
-        _skill, _text, tools, _model = parse_cursor_stream_json(stdout, "demo")
+        _skill, _text, tools, _model = parse_cursor_stream_json(
+            stdout, "demo", tmp_path
+        )
         assert len(tools) == 1
 
-    def test_skill_detected_via_translated_cursor_tool_call(self) -> None:
+    def test_skill_detected_via_translated_cursor_tool_call(
+        self, tmp_path: Path
+    ) -> None:
         skill_call = (
             '{"type":"tool_call","subtype":"started",'
             '"tool_call":{"function":{"name":"Skill","arguments":"demo"}}}'
         )
         stdout = _event_lines(_ASSISTANT_HI, skill_call)
-        skill, _text, _tools, _model = parse_cursor_stream_json(stdout, "demo")
+        skill, _text, _tools, _model = parse_cursor_stream_json(
+            stdout, "demo", tmp_path
+        )
         assert skill is True
 
-    def test_skill_detected_via_claude_style_assistant_block(self) -> None:
+    def test_skill_detected_via_claude_style_assistant_block(
+        self, tmp_path: Path
+    ) -> None:
         # parse_stream_json sees a nested Skill tool_use block while there are
         # no Cursor tool_call events, so the verdict comes from its view alone.
         assistant_skill = (
@@ -189,22 +231,53 @@ class TestParseCursorStreamJson:
             '[{"type":"tool_use","name":"Skill","input":{"skill":"demo"}}]}}'
         )
         stdout = _event_lines(assistant_skill)
-        skill, _text, _tools, _model = parse_cursor_stream_json(stdout, "demo")
+        skill, _text, _tools, _model = parse_cursor_stream_json(
+            stdout, "demo", tmp_path
+        )
         assert skill is True
 
-    def test_skill_detected_via_read_of_skill_md(self) -> None:
+    def test_skill_detected_via_read_of_project_skill_md(
+        self, tmp_path: Path
+    ) -> None:
+        skill_md = tmp_path / ".cursor" / "skills" / "demo" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True)
+        skill_md.write_text("x")
+        args = {"args": {"path": str(skill_md)}}
+        skill_read = json.dumps(
+            {
+                "type": "tool_call",
+                "subtype": "started",
+                "tool_call": {"readToolCall": args},
+            }
+        )
+        stdout = _event_lines(_ASSISTANT_HI, skill_read)
+        skill, _text, _tools, _model = parse_cursor_stream_json(
+            stdout, "demo", tmp_path
+        )
+        assert skill is True
+
+    def test_skill_not_detected_for_user_skill_root_read(
+        self, tmp_path: Path
+    ) -> None:
+        # Reading the skill from ~/.claude/skills is not a project hit.
         skill_read = (
             '{"type":"tool_call","subtype":"started",'
             '"tool_call":{"readToolCall":{"args":{"path":'
             '"/Users/me/.claude/skills/demo/SKILL.md"}}}}'
         )
         stdout = _event_lines(_ASSISTANT_HI, skill_read)
-        skill, _text, _tools, _model = parse_cursor_stream_json(stdout, "demo")
-        assert skill is True
+        skill, _text, _tools, _model = parse_cursor_stream_json(
+            stdout, "demo", tmp_path
+        )
+        assert skill is False
 
-    def test_skill_not_detected_for_unrelated_run(self) -> None:
+    def test_skill_not_detected_for_unrelated_run(
+        self, tmp_path: Path
+    ) -> None:
         stdout = _event_lines(_ASSISTANT_HI, _READ_STARTED)
-        skill, _text, _tools, _model = parse_cursor_stream_json(stdout, "demo")
+        skill, _text, _tools, _model = parse_cursor_stream_json(
+            stdout, "demo", tmp_path
+        )
         assert skill is False
 
 
@@ -239,20 +312,32 @@ class TestCursorRunnerVersion:
 
 
 class TestCursorRunnerPreflight:
-    def test_ready_when_cli_present(
+    def test_ready_when_cli_present_and_key_set(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
             cursor_runner.shutil, "which", lambda _n: "/usr/bin/cursor-agent"
         )
+        monkeypatch.setenv("CURSOR_API_KEY", "k")
         assert CursorRunner().preflight() is None
 
     def test_reports_missing_cli(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(cursor_runner.shutil, "which", lambda _n: None)
+        monkeypatch.setenv("CURSOR_API_KEY", "k")
         msg = CursorRunner().preflight()
         assert msg is not None and "cursor-agent CLI not found" in msg
+
+    def test_reports_missing_api_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            cursor_runner.shutil, "which", lambda _n: "/usr/bin/cursor-agent"
+        )
+        monkeypatch.delenv("CURSOR_API_KEY", raising=False)
+        msg = CursorRunner().preflight()
+        assert msg is not None and "CURSOR_API_KEY" in msg
 
 
 class TestCursorRunnerValidateModel:
@@ -314,13 +399,19 @@ class TestCursorRunnerRun:
         def fake_run(cmd: list[str], **kw: Any) -> Any:
             captured["cmd"] = cmd
             captured["cwd"] = kw.get("cwd")
+            captured["env"] = kw.get("env")
             return type("R", (), {"stdout": ""})()
 
         monkeypatch.setattr(subprocess, "run", fake_run)
         monkeypatch.setattr(
             cursor_runner,
             "parse_cursor_stream_json",
-            lambda _stdout, _skill: (True, "answer", [], "resolved-model"),
+            lambda _stdout, _skill, _root: (
+                True,
+                "answer",
+                [],
+                "resolved-model",
+            ),
         )
 
     def test_includes_model_flag_when_model_given(
@@ -362,3 +453,29 @@ class TestCursorRunnerRun:
         )
 
         assert captured["cwd"] == str(tmp_path)
+
+    def test_pins_workspace_to_repo_root_without_isolation(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        captured: dict[str, Any] = {}
+        self._stub_subprocess(monkeypatch, captured)
+
+        CursorRunner().run(
+            "do it", tmp_path, "demo", isolate=False, model="gpt-5"
+        )
+
+        cmd = captured["cmd"]
+        assert "--workspace" in cmd
+        assert cmd[cmd.index("--workspace") + 1] == str(tmp_path)
+
+    def test_runs_under_isolated_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("HOME", "/real/home")
+        captured: dict[str, Any] = {}
+        self._stub_subprocess(monkeypatch, captured)
+
+        CursorRunner().run("do it", tmp_path, "demo", model="gpt-5")
+
+        env = captured["env"]
+        assert env["HOME"] != "/real/home"

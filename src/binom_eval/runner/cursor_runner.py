@@ -19,11 +19,18 @@ existing `EvalRun` predicates (`tool_invoked`, `agent_invoked`,
 
 Cursor loads skills by reading `{skill_name}/SKILL.md` via `readToolCall`
 rather than emitting Claude Code's `Skill` tool, so skill invocation is also
-detected when a translated Read targets that path.
+detected when a translated Read targets that path. Detection is scoped to the
+run's workspace: only a SKILL.md read under `repo_root` counts, so a trigger
+pass means the project's own skill was used rather than a copy from a user
+skill root (`~/.claude/skills`, `~/.cursor/skills`, ...) that may differ. The
+run is also pinned to that workspace via `--workspace repo_root` so the
+project's `.cursor/skills/`, `skills/`, and `.claude/skills/` trees are the
+ones exposed to the agent.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -32,6 +39,7 @@ from typing import Any
 from binom_eval.runner import (
     DEFAULT_TIMEOUT_SECONDS,
     Runner,
+    fake_home_env,
     isolated_workdir,
     stripped_env,
 )
@@ -81,20 +89,38 @@ def _cursor_tool_use(event: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _cursor_skill_read_hit(block: dict[str, Any], skill_name: str) -> bool:
-    """True when Cursor read a skill's SKILL.md via `readToolCall`.
+def _cursor_skill_read_hit(
+    block: dict[str, Any], skill_name: str, repo_root: Path
+) -> bool:
+    """True when Cursor read this project's skill SKILL.md via `readToolCall`.
 
     Cursor discovers skills at startup and pulls instructions on demand by
-    reading `{skill_name}/SKILL.md` from project or user skill directories.
+    reading `{skill_name}/SKILL.md`. A skill may be present both in the project
+    (`{repo_root}/.cursor/skills/`, `{repo_root}/skills/`,
+    `{repo_root}/.claude/skills/`) and in a user skill root
+    (`~/.claude/skills`, `~/.cursor/skills`, ...). Only a read whose path names
+    `{skill_name}/SKILL.md` *and* resolves under `repo_root` counts as a hit,
+    so a trigger pass attests to the project's own skill rather than a global
+    copy that may differ.
     """
     if block.get("name") != "Read":
         return False
-    path = str(block.get("input", {}).get("path", "")).replace(chr(92), "/")
-    return f"/{skill_name}/SKILL.md" in path
+    raw = str(block.get("input", {}).get("path", "")).replace(chr(92), "/")
+    if not raw or f"/{skill_name}/SKILL.md" not in raw:
+        return False
+    root = repo_root.resolve()
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return False
+    return resolved == root or root in resolved.parents
 
 
 def parse_cursor_stream_json(
-    stdout: str, skill_name: str
+    stdout: str, skill_name: str, repo_root: Path
 ) -> tuple[bool, str, list[dict[str, Any]], str]:
     """Parse `cursor-agent --output-format stream-json` stdout into
     (skill_invoked, assistant_text, tool_uses, model).
@@ -102,7 +128,9 @@ def parse_cursor_stream_json(
     Assistant text and the model reuse `parse_stream_json` (Cursor and Claude
     share those event shapes); the tool record is rebuilt from Cursor's
     top-level `tool_call` events, and the skill verdict is taken from either
-    parser's view of the translated tool calls.
+    parser's view of the translated tool calls. `repo_root` scopes the
+    SKILL.md read check to the run's workspace so a trigger pass attests to the
+    project's own skill rather than a user skill root.
     """
     skill_invoked, text, _claude_tool_uses, model = parse_stream_json(
         stdout, skill_name
@@ -119,7 +147,8 @@ def parse_cursor_stream_json(
         )
     )
     skill_invoked = skill_invoked or any(
-        _is_skill_hit(block, skill_name) or _cursor_skill_read_hit(block, skill_name)
+        _is_skill_hit(block, skill_name)
+        or _cursor_skill_read_hit(block, skill_name, repo_root)
         for block in tool_uses
     )
     return skill_invoked, text, tool_uses, model
@@ -145,14 +174,19 @@ class CursorRunner(Runner):
     def preflight(self) -> str | None:
         """Return why `cursor-agent` cannot run, or None when ready.
 
-        Requires the `cursor-agent` CLI on PATH. Unlike Claude, Cursor
-        authenticates from its own stored session (`cursor-agent login`)
-        rather than a single environment variable, so there is no credential
-        env var to check here; an unauthenticated CLI surfaces on the first
-        trial.
+        Requires the `cursor-agent` CLI on PATH and `CURSOR_API_KEY` set. Live
+        runs execute under a throwaway `HOME` (`fake_home_env`) so the user's
+        stored Cursor session is deliberately hidden -- evals must not pick up
+        the invoking user's settings -- which leaves the API key as the only
+        credential the headless run can authenticate with.
         """
         if shutil.which("cursor-agent") is None:
             return "cursor-agent CLI not found on PATH"
+        if not os.environ.get("CURSOR_API_KEY"):
+            return (
+                "CURSOR_API_KEY is not set; live evals run under an isolated "
+                "HOME (no stored login) and authenticate only via that key."
+            )
         return None
 
     def validate_model(self, model: str, timeout: int = 30) -> str | None:
@@ -195,32 +229,41 @@ class CursorRunner(Runner):
         (see `isolated_workdir`) so a skill that writes to the tree cannot
         affect `repo_root` or a concurrent run; otherwise it runs in
         `repo_root` directly. `--force` and `--trust` keep the headless run
-        from blocking on command or workspace-trust prompts. `model` is assumed
-        to be set and is always forwarded as `--model`.
+        from blocking on command or workspace-trust prompts. The run is pinned
+        to the working tree with `--workspace` (and a matching `cwd`) so the
+        project's own `.cursor/skills/`, `skills/`, and `.claude/skills/` trees
+        are the ones exposed to the agent, and skill detection is scoped to
+        that same tree. The run also executes under a throwaway `HOME`
+        (`fake_home_env`) so the user's Cursor settings and skill roots never
+        leak in; it authenticates from `CURSOR_API_KEY`, preserved in that
+        scrubbed env. `model` is assumed to be set and is always forwarded as
+        `--model`.
         """
-        cmd = [
-            "cursor-agent",
-            "--print",
-            "--output-format",
-            "stream-json",
-            "--force",
-            "--trust",
-            "--model",
-            model,
-            prompt,
-        ]
-        with isolated_workdir(repo_root, isolate) as workdir:
+        with isolated_workdir(repo_root, isolate) as workdir, fake_home_env() as env:
+            cmd = [
+                "cursor-agent",
+                "--print",
+                "--output-format",
+                "stream-json",
+                "--force",
+                "--trust",
+                "--workspace",
+                str(workdir),
+                "--model",
+                model,
+                prompt,
+            ]
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 cwd=str(workdir),
-                env=stripped_env(),
+                env=env,
                 timeout=timeout,
             )
-        skill_invoked, assistant_text, tool_uses, model = (
-            parse_cursor_stream_json(proc.stdout, skill_name)
-        )
+            skill_invoked, assistant_text, tool_uses, model = (
+                parse_cursor_stream_json(proc.stdout, skill_name, workdir)
+            )
         return EvalRun(
             eval_id="",
             prompt=prompt,

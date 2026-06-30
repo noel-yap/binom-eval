@@ -8,8 +8,14 @@ nothing here caches — every trial is a fresh invocation.
 
 Backends are pluggable: `Runner` is the backend-agnostic interface and
 `ClaudeRunner` (in `claude_runner.py`) is the `claude -p` implementation.
-The shared subprocess/env helpers (`stripped_env`, `isolated_workdir`,
-`_model_probe_rejected`) live here so every backend can build on them.
+The shared subprocess/env helpers (`stripped_env`, `fake_home_env`,
+`isolated_workdir`, `_model_probe_rejected`) live here so every backend can
+build on them. Live runs execute under a throwaway `HOME` (`fake_home_env`)
+so no harness picks up the invoking user's settings -- user skill roots
+(`~/.claude/skills`, `~/.cursor/skills`, ...), MCP config, or stored logins --
+and grade only against the project; backends therefore authenticate from
+environment credentials (`ANTHROPIC_API_KEY`, `CURSOR_API_KEY`) rather than a
+stored session under the real home.
 
 Concurrency is throttled by an optional shared `gate` (a `threading.Semaphore`
 the caller threads through every run): trials within a batch, and whole evals
@@ -74,6 +80,28 @@ def stripped_env() -> dict[str, str]:
     return {
         k: v for k, v in os.environ.items() if k not in NESTED_SESSION_MARKERS
     }
+
+
+@contextlib.contextmanager
+def fake_home_env() -> Iterator[dict[str, str]]:
+    """Yield a scrubbed env whose `HOME` points at a fresh empty directory.
+
+    Layered on `stripped_env`, this repoints `HOME` (and `USERPROFILE` on
+    Windows) at a throwaway temp directory for the duration of one run, so a
+    spawned agent CLI cannot read the invoking user's home: no user skill
+    roots (`~/.claude/skills`, `~/.cursor/skills`, ...), no per-user MCP or CLI
+    config, and no stored login session. Evals therefore grade only against
+    the project's own skills/agents, never whatever happens to be installed
+    for the user. Because the stored session is hidden, every backend must
+    authenticate from an environment credential (e.g. `ANTHROPIC_API_KEY`,
+    `CURSOR_API_KEY`), which is preserved by `stripped_env`. The temp home is
+    removed when the run ends.
+    """
+    env = stripped_env()
+    with tempfile.TemporaryDirectory(prefix="binom-eval-home-") as home:
+        env["HOME"] = home
+        env["USERPROFILE"] = home
+        yield env
 
 
 def _model_probe_rejected(stdout: str) -> str | None:
@@ -313,6 +341,7 @@ __all__ = [
     "CursorRunner",
     "Runner",
     "cli_version",
+    "fake_home_env",
     "isolated_workdir",
     "resolve_runner",
     "run_claude",
