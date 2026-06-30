@@ -46,6 +46,7 @@ from binom_eval.runner import (
 from binom_eval.stream_json import (
     EvalRun,
     _is_skill_hit,
+    _skill_read_hit,
     _try_parse_json,
     parse_stream_json,
 )
@@ -114,36 +115,6 @@ def _cursor_tool_use(event: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _cursor_skill_read_hit(
-    block: dict[str, Any], skill_name: str, repo_root: Path
-) -> bool:
-    """True when Cursor read this project's skill SKILL.md via `readToolCall`.
-
-    Cursor discovers skills at startup and pulls instructions on demand by
-    reading `{skill_name}/SKILL.md`. A skill may be present both in the project
-    (`{repo_root}/.cursor/skills/`, `{repo_root}/skills/`,
-    `{repo_root}/.claude/skills/`) and in a user skill root
-    (`~/.claude/skills`, `~/.cursor/skills`, ...). Only a read whose path names
-    `{skill_name}/SKILL.md` *and* resolves under `repo_root` counts as a hit,
-    so a trigger pass attests to the project's own skill rather than a global
-    copy that may differ.
-    """
-    if block.get("name") != "Read":
-        return False
-    raw = str(block.get("input", {}).get("path", "")).replace(chr(92), "/")
-    if not raw or f"/{skill_name}/SKILL.md" not in raw:
-        return False
-    root = repo_root.resolve()
-    candidate = Path(raw)
-    if not candidate.is_absolute():
-        candidate = root / candidate
-    try:
-        resolved = candidate.resolve()
-    except OSError:
-        return False
-    return resolved == root or root in resolved.parents
-
-
 def parse_cursor_stream_json(
     stdout: str, skill_name: str, repo_root: Path
 ) -> tuple[bool, str, list[dict[str, Any]], str]:
@@ -173,7 +144,7 @@ def parse_cursor_stream_json(
     )
     skill_invoked = skill_invoked or any(
         _is_skill_hit(block, skill_name)
-        or _cursor_skill_read_hit(block, skill_name, repo_root)
+        or _skill_read_hit(block, skill_name, repo_root)
         for block in tool_uses
     )
     return skill_invoked, text, tool_uses, model

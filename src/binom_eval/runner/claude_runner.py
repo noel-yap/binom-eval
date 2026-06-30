@@ -25,6 +25,11 @@ from binom_eval.runner import (
 )
 from binom_eval.stream_json import EvalRun, parse_stream_json
 
+# Live evals run under a throwaway HOME so the invoking user's skill roots never
+# leak in, but still load project skills from the run's workspace via
+# `--setting-sources project` (not an empty source list, which would hide them).
+CLAUDE_SETTING_SOURCES = "project"
+
 
 class ClaudeRunner(Runner):
     """A `Runner` backed by the `claude -p` CLI."""
@@ -47,8 +52,9 @@ class ClaudeRunner(Runner):
         """Return why `claude -p` cannot run, or None when ready.
 
         Requires the `claude` CLI on PATH and `ANTHROPIC_API_KEY` set: live
-        evals run with `--bare` (no settings sources), so the key is the only
-        credential the nested run can authenticate with.
+        evals run with `--bare` and `--setting-sources project` under a
+        throwaway `HOME`, so only the workspace's own skills load while user
+        settings and skill roots stay hidden.
         """
         if shutil.which("claude") is None:
             return "claude CLI not found on PATH"
@@ -79,7 +85,7 @@ class ClaudeRunner(Runner):
             model,
             "--bare",
             "--setting-sources",
-            "",
+            CLAUDE_SETTING_SOURCES,
             "--output-format",
             "stream-json",
             "--verbose",
@@ -115,9 +121,10 @@ class ClaudeRunner(Runner):
         `repo_root` directly. `model` is assumed to be set and is always
         forwarded as `--model` so callers select a specific model for eval runs
         without relying on the CLI default. The run executes under a throwaway
-        `HOME` (`fake_home_env`) -- on top of `--bare --setting-sources ""` --
-        so no user-level config or skill root leaks in; the run authenticates
-        from `ANTHROPIC_API_KEY`, preserved in that scrubbed env.
+        `HOME` (`fake_home_env`) -- on top of `--bare --setting-sources
+        project` -- so no user-level config or skill root leaks in; project
+        skills from the workspace still load. The run authenticates from
+        `ANTHROPIC_API_KEY`, preserved in that scrubbed env.
         """
         cmd = [
             "claude",
@@ -125,7 +132,7 @@ class ClaudeRunner(Runner):
             prompt,
             "--bare",
             "--setting-sources",
-            "",
+            CLAUDE_SETTING_SOURCES,
             "--output-format",
             "stream-json",
             "--verbose",
@@ -144,7 +151,7 @@ class ClaudeRunner(Runner):
                 timeout=timeout,
             )
         skill_invoked, assistant_text, tool_uses, model = parse_stream_json(
-            proc.stdout, skill_name
+            proc.stdout, skill_name, workdir
         )
         return EvalRun(
             eval_id="",

@@ -8,6 +8,7 @@ files keep only the tests for their thin, SKILL_NAME-bound wrappers.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from binom_eval import (
     _assistant_content_blocks,
@@ -15,6 +16,7 @@ from binom_eval import (
     _is_assistant_event,
     _is_skill_hit,
     _message_from_event,
+    _skill_read_hit,
     _text_from_block,
     _try_parse_json,
     agent_invoked,
@@ -174,6 +176,52 @@ class TestParseStreamJson:
         )
         invoked, text, *_ = parse_stream_json("garbage line\n" + line, SKILL)
         assert (invoked, text) == (False, "ok")
+
+    def test_counts_skill_read_under_repo_root(self, tmp_path: Path) -> None:
+        skill_dir = tmp_path / "skills" / SKILL
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("skill body", encoding="utf-8")
+        events = [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "Read",
+                            "input": {
+                                "file_path": str(skill_dir / "SKILL.md"),
+                            },
+                        }
+                    ]
+                },
+            }
+        ]
+        invoked, _, tools, _ = parse_stream_json(
+            "\n".join(map(json.dumps, events)), SKILL, tmp_path
+        )
+        assert invoked is True
+        assert tools[0]["name"] == "Read"
+
+
+class TestSkillReadHit:
+    def test_matches_project_skill_read(self, tmp_path: Path) -> None:
+        skill_dir = tmp_path / ".claude" / "skills" / "demo"
+        skill_dir.mkdir(parents=True)
+        skill_file = skill_dir / "SKILL.md"
+        skill_file.write_text("x", encoding="utf-8")
+        block = {
+            "name": "Read",
+            "input": {"path": str(skill_file)},
+        }
+        assert _skill_read_hit(block, "demo", tmp_path)
+
+    def test_rejects_user_skill_root_outside_repo(self, tmp_path: Path) -> None:
+        block = {
+            "name": "Read",
+            "input": {"path": "/Users/me/.claude/skills/demo/SKILL.md"},
+        }
+        assert not _skill_read_hit(block, "demo", tmp_path)
 
 
 

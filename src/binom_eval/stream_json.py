@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -79,6 +80,37 @@ def _is_skill_hit(block: dict[str, Any], skill_name: str) -> bool:
     )
 
 
+def _skill_read_hit(
+    block: dict[str, Any], skill_name: str, repo_root: Path
+) -> bool:
+    """True when a Read tool_use opened this project's `{skill_name}/SKILL.md`.
+
+    Agents may invoke a skill via the Skill tool or by reading its SKILL.md
+    directly. Only a read whose path names `{skill_name}/SKILL.md` and resolves
+    under `repo_root` counts, so a trigger pass attests to the project's own
+    skill rather than a copy from a user skill root that may differ.
+    """
+    if block.get("name") != "Read":
+        return False
+    payload = block.get("input", {})
+    if not isinstance(payload, dict):
+        return False
+    raw = str(payload.get("path") or payload.get("file_path") or "").replace(
+        chr(92), "/"
+    )
+    if not raw or f"/{skill_name}/SKILL.md" not in raw:
+        return False
+    root = repo_root.resolve()
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return False
+    return resolved == root or root in resolved.parents
+
+
 def _text_from_block(block: dict[str, Any]) -> str | None:
     """The text of a `text` block, or None for any other block type."""
     return block.get("text", "") if block.get("type") == "text" else None
@@ -95,15 +127,26 @@ def _model_from_events(events: list[dict[str, Any]]) -> str:
 
 
 def parse_stream_json(
-    stdout: str, skill_name: str
+    stdout: str,
+    skill_name: str,
+    repo_root: Path | None = None,
 ) -> tuple[bool, str, list[dict[str, Any]], str]:
     """Parse `claude -p --output-format stream-json` stdout into
-    (skill_invoked, assistant_text, tool_uses, model)."""
+    (skill_invoked, assistant_text, tool_uses, model).
+
+    When `repo_root` is given, a Read of `{skill_name}/SKILL.md` under that
+    tree also counts as a skill invocation (some backends read the file rather
+    than emitting a Skill tool_use).
+    """
     events = list(filter(None, map(_try_parse_json, stdout.splitlines())))
     blocks = _assistant_content_blocks(events)
-    skill_invoked = any(_is_skill_hit(b, skill_name) for b in blocks)
-    text = "\n".join(filter(None, map(_text_from_block, blocks)))
     tool_uses = list(filter(lambda b: b.get("type") == "tool_use", blocks))
+    skill_invoked = any(_is_skill_hit(b, skill_name) for b in blocks)
+    if repo_root is not None:
+        skill_invoked = skill_invoked or any(
+            _skill_read_hit(block, skill_name, repo_root) for block in tool_uses
+        )
+    text = "\n".join(filter(None, map(_text_from_block, blocks)))
     model = _model_from_events(events)
     return skill_invoked, text, tool_uses, model
 

@@ -97,6 +97,7 @@ from binom_eval.stream_json import (
     _is_skill_hit,
     _message_from_event,
     _model_from_events,
+    _skill_read_hit,
     _text_from_block,
     _try_parse_json,
     agent_invoked,

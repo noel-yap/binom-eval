@@ -151,7 +151,7 @@ class TestClaudeRunnerRun:
         monkeypatch.setattr(
             claude_runner,
             "parse_stream_json",
-            lambda _stdout, _skill: (True, "answer", [], "resolved-model"),
+            lambda _stdout, _skill, _root=None: (True, "answer", [], "resolved-model"),
         )
 
     def test_includes_model_flag_when_model_given(

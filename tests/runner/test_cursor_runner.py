@@ -21,12 +21,12 @@ from binom_eval import EvalRun
 from binom_eval.runner import cursor_runner
 from binom_eval.runner.cursor_runner import (
     CursorRunner,
-    _cursor_skill_read_hit,
     _cursor_tool_use,
     _is_started_tool_call,
     cursor_env,
     parse_cursor_stream_json,
 )
+from binom_eval.stream_json import _skill_read_hit
 
 
 class TestIsStartedToolCall:
@@ -132,7 +132,7 @@ class TestCursorSkillReadHit:
             "name": "Read",
             "input": {"path": str(skill_md)},
         }
-        assert _cursor_skill_read_hit(
+        assert _skill_read_hit(
             block, "dependency-injection", tmp_path
         )
 
@@ -145,7 +145,7 @@ class TestCursorSkillReadHit:
             "name": "Read",
             "input": {"path": str(skill_md)},
         }
-        assert _cursor_skill_read_hit(block, "demo", tmp_path)
+        assert _skill_read_hit(block, "demo", tmp_path)
 
     def test_true_for_relative_project_skill_path(self, tmp_path: Path) -> None:
         block = {
@@ -153,7 +153,7 @@ class TestCursorSkillReadHit:
             "name": "Read",
             "input": {"path": "skills/demo/SKILL.md"},
         }
-        assert _cursor_skill_read_hit(block, "demo", tmp_path)
+        assert _skill_read_hit(block, "demo", tmp_path)
 
     def test_false_for_user_skill_root_outside_repo(
         self, tmp_path: Path
@@ -165,7 +165,7 @@ class TestCursorSkillReadHit:
             "name": "Read",
             "input": {"path": "/Users/me/.claude/skills/demo/SKILL.md"},
         }
-        assert not _cursor_skill_read_hit(block, "demo", tmp_path)
+        assert not _skill_read_hit(block, "demo", tmp_path)
 
     def test_false_for_unrelated_read(self, tmp_path: Path) -> None:
         block = {
@@ -173,7 +173,7 @@ class TestCursorSkillReadHit:
             "name": "Read",
             "input": {"path": "README.md"},
         }
-        assert not _cursor_skill_read_hit(block, "demo", tmp_path)
+        assert not _skill_read_hit(block, "demo", tmp_path)
 
     def test_false_for_other_skill(self, tmp_path: Path) -> None:
         block = {
@@ -181,7 +181,7 @@ class TestCursorSkillReadHit:
             "name": "Read",
             "input": {"path": "skills/other/SKILL.md"},
         }
-        assert not _cursor_skill_read_hit(block, "demo", tmp_path)
+        assert not _skill_read_hit(block, "demo", tmp_path)
 
 
 
