@@ -415,6 +415,7 @@ def expand_eval_item(item: dict[str, Any], eval_dir: Path) -> dict[str, Any]:
     if fixture is not None and template is not None:
         content = (eval_dir / fixture).read_text(encoding="utf-8")
         expanded["prompt"] = template.format(fixture=content)
+        expanded["prompt_input"] = content
     elif fixture is not None or template is not None:
         raise ValueError(
             f"eval {expanded.get('id')!r} needs both prompt_template and fixture"

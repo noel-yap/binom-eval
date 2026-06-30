@@ -152,7 +152,7 @@ class TestRunClaudeBatch:
             )
 
         runs = binom_eval.run_claude_batch(
-            {"id": "e1", "prompt": "p"},
+            {"id": "e1", "prompt": "p", "prompt_input": "fixture body"},
             Path("."),
             "demo",
             count=3,
@@ -162,6 +162,7 @@ class TestRunClaudeBatch:
         assert len(runs) == 3
         assert all(run.eval_id == "e1" for run in runs)
         assert all(run.prompt == "p" for run in runs)
+        assert all(run.prompt_input == "fixture body" for run in runs)
 
     def test_gate_caps_concurrent_runs(self) -> None:
         lock = threading.Lock()

@@ -25,6 +25,7 @@ class EvalRun:
     assistant_text: str
     tool_uses: list[dict[str, Any]] = field(default_factory=list)
     model: str = ""
+    prompt_input: str = ""
 
 
 def _try_parse_json(line: str) -> dict[str, Any] | None:
