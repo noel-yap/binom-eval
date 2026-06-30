@@ -50,6 +50,31 @@ from binom_eval.stream_json import (
     parse_stream_json,
 )
 
+# On macOS the `cursor-agent` CLI persists its login/session under the
+# `cursor-user` account in the user's *login* keychain. Evals run the CLI
+# under a throwaway `HOME` (`fake_home_env`) with no login keychain
+# present, so the CLI's keychain access fails -- macOS raises the blocking
+# 'A keychain cannot be found to store "cursor-user."' popup that stalls
+# headless runs. `AGENT_CLI_CREDENTIAL_STORE=memory` tells the CLI to keep
+# credentials in-process instead of the macOS login keychain; the run then
+# authenticates from `CURSOR_API_KEY`, which the harness always supplies.
+# `CI=true` is a defensive non-interactive signal so the CLI never falls back
+# to a login-keychain lock check or prompt.
+KEYCHAIN_SKIP_ENV = {
+    "AGENT_CLI_CREDENTIAL_STORE": "memory",
+    "CI": "true",
+}
+
+
+def cursor_env(base: dict[str, str]) -> dict[str, str]:
+    """Return `base` with the keychain-skip markers forced on.
+
+    Layered over any base env (`stripped_env` for probes, `fake_home_env`
+    for live runs) so every `cursor-agent` invocation bypasses the macOS
+    login keychain and never raises the blocking 'cursor-user' popup.
+    """
+    return {**base, **KEYCHAIN_SKIP_ENV}
+
 
 def _is_started_tool_call(event: dict[str, Any]) -> bool:
     """True if `event` is a `tool_call` `started` event."""
@@ -165,7 +190,7 @@ class CursorRunner(Runner):
                 capture_output=True,
                 text=True,
                 timeout=10,
-                env=stripped_env(),
+                env=cursor_env(stripped_env()),
             )
             return result.stdout.strip()
         except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -203,7 +228,7 @@ class CursorRunner(Runner):
                 ["cursor-agent", "--list-models"],
                 capture_output=True,
                 text=True,
-                env=stripped_env(),
+                env=cursor_env(stripped_env()),
                 timeout=timeout,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -236,10 +261,17 @@ class CursorRunner(Runner):
         that same tree. The run also executes under a throwaway `HOME`
         (`fake_home_env`) so the user's Cursor settings and skill roots never
         leak in; it authenticates from `CURSOR_API_KEY`, preserved in that
-        scrubbed env. `model` is assumed to be set and is always forwarded as
-        `--model`.
+        scrubbed env. Because that throwaway `HOME` has no login keychain,
+        the run also sets `AGENT_CLI_CREDENTIAL_STORE=memory` (via `cursor_env`)
+        so the CLI bypasses the macOS keychain and never raises the
+        blocking `cursor-user` popup. `model` is assumed to be set and is
+        always forwarded as `--model`.
         """
-        with isolated_workdir(repo_root, isolate) as workdir, fake_home_env() as env:
+        with (
+            isolated_workdir(repo_root, isolate) as workdir,
+            fake_home_env() as base_env,
+        ):
+            env = cursor_env(base_env)
             cmd = [
                 "cursor-agent",
                 "--print",

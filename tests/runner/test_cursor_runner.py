@@ -24,6 +24,7 @@ from binom_eval.runner.cursor_runner import (
     _cursor_skill_read_hit,
     _cursor_tool_use,
     _is_started_tool_call,
+    cursor_env,
     parse_cursor_stream_json,
 )
 
@@ -479,3 +480,77 @@ class TestCursorRunnerRun:
 
         env = captured["env"]
         assert env["HOME"] != "/real/home"
+
+
+class TestCursorEnv:
+    def test_forces_keychain_skip_markers(self) -> None:
+        env = cursor_env({"PATH": "/usr/bin"})
+        assert env["AGENT_CLI_CREDENTIAL_STORE"] == "memory"
+        assert env["CI"] == "true"
+
+    def test_preserves_base_entries(self) -> None:
+        env = cursor_env({"PATH": "/usr/bin", "CURSOR_API_KEY": "k"})
+        assert env["PATH"] == "/usr/bin"
+        assert env["CURSOR_API_KEY"] == "k"
+
+    def test_overrides_conflicting_base_values(self) -> None:
+        # A stray CI=false in the base must not re-enable interactive prompts.
+        env = cursor_env({"CI": "false", "AGENT_CLI_CREDENTIAL_STORE": "file"})
+        assert env["CI"] == "true"
+        assert env["AGENT_CLI_CREDENTIAL_STORE"] == "memory"
+
+    def test_does_not_mutate_base(self) -> None:
+        base = {"PATH": "/usr/bin"}
+        cursor_env(base)
+        assert base == {"PATH": "/usr/bin"}
+
+
+class TestCursorRunnerSkipsKeychain:
+    @staticmethod
+    def _capture_env(
+        monkeypatch: pytest.MonkeyPatch, captured: dict[str, Any]
+    ) -> None:
+        def fake_run(cmd: list[str], **kw: Any) -> Any:
+            captured["env"] = kw.get("env")
+            return type("R", (), {"stdout": ""})()
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+    def test_run_sets_keychain_skip_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        captured: dict[str, Any] = {}
+        self._capture_env(monkeypatch, captured)
+        monkeypatch.setattr(
+            cursor_runner,
+            "parse_cursor_stream_json",
+            lambda *_a: (False, "", [], "m"),
+        )
+
+        CursorRunner().run("do it", tmp_path, "demo", model="gpt-5")
+
+        env = captured["env"]
+        assert env["AGENT_CLI_CREDENTIAL_STORE"] == "memory"
+        assert env["CI"] == "true"
+
+    def test_version_sets_keychain_skip_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, Any] = {}
+        self._capture_env(monkeypatch, captured)
+
+        CursorRunner().version()
+
+        assert captured["env"]["AGENT_CLI_CREDENTIAL_STORE"] == "memory"
+        assert captured["env"]["CI"] == "true"
+
+    def test_validate_model_sets_keychain_skip_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, Any] = {}
+        self._capture_env(monkeypatch, captured)
+
+        CursorRunner().validate_model("gpt-5")
+
+        assert captured["env"]["AGENT_CLI_CREDENTIAL_STORE"] == "memory"
+        assert captured["env"]["CI"] == "true"
