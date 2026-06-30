@@ -30,6 +30,7 @@ ones exposed to the agent.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -38,6 +39,7 @@ from typing import Any
 from binom_eval.runner import (
     DEFAULT_TIMEOUT_SECONDS,
     Runner,
+    fake_home_env,
     isolated_workdir,
     stripped_env,
 )
@@ -172,14 +174,19 @@ class CursorRunner(Runner):
     def preflight(self) -> str | None:
         """Return why `cursor-agent` cannot run, or None when ready.
 
-        Requires the `cursor-agent` CLI on PATH. Unlike Claude, Cursor
-        authenticates from its own stored session (`cursor-agent login`)
-        rather than a single environment variable, so there is no credential
-        env var to check here; an unauthenticated CLI surfaces on the first
-        trial.
+        Requires the `cursor-agent` CLI on PATH and `CURSOR_API_KEY` set. Live
+        runs execute under a throwaway `HOME` (`fake_home_env`) so the user's
+        stored Cursor session is deliberately hidden -- evals must not pick up
+        the invoking user's settings -- which leaves the API key as the only
+        credential the headless run can authenticate with.
         """
         if shutil.which("cursor-agent") is None:
             return "cursor-agent CLI not found on PATH"
+        if not os.environ.get("CURSOR_API_KEY"):
+            return (
+                "CURSOR_API_KEY is not set; live evals run under an isolated "
+                "HOME (no stored login) and authenticate only via that key."
+            )
         return None
 
     def validate_model(self, model: str, timeout: int = 30) -> str | None:
@@ -226,10 +233,13 @@ class CursorRunner(Runner):
         to the working tree with `--workspace` (and a matching `cwd`) so the
         project's own `.cursor/skills/`, `skills/`, and `.claude/skills/` trees
         are the ones exposed to the agent, and skill detection is scoped to
-        that same tree. `model` is assumed to be set and is always forwarded as
+        that same tree. The run also executes under a throwaway `HOME`
+        (`fake_home_env`) so the user's Cursor settings and skill roots never
+        leak in; it authenticates from `CURSOR_API_KEY`, preserved in that
+        scrubbed env. `model` is assumed to be set and is always forwarded as
         `--model`.
         """
-        with isolated_workdir(repo_root, isolate) as workdir:
+        with isolated_workdir(repo_root, isolate) as workdir, fake_home_env() as env:
             cmd = [
                 "cursor-agent",
                 "--print",
@@ -248,7 +258,7 @@ class CursorRunner(Runner):
                 capture_output=True,
                 text=True,
                 cwd=str(workdir),
-                env=stripped_env(),
+                env=env,
                 timeout=timeout,
             )
             skill_invoked, assistant_text, tool_uses, model = (

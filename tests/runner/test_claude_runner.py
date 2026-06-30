@@ -144,6 +144,7 @@ class TestClaudeRunnerRun:
         def fake_run(cmd: list[str], **kw: Any) -> Any:
             captured["cmd"] = cmd
             captured["cwd"] = kw.get("cwd")
+            captured["env"] = kw.get("env")
             return type("R", (), {"stdout": ""})()
 
         monkeypatch.setattr(subprocess, "run", fake_run)
@@ -192,3 +193,15 @@ class TestClaudeRunnerRun:
         )
 
         assert captured["cwd"] == str(tmp_path)
+
+    def test_runs_under_isolated_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("HOME", "/real/home")
+        captured: dict[str, Any] = {}
+        self._stub_subprocess(monkeypatch, captured)
+
+        ClaudeRunner().run("do it", tmp_path, "demo", model="claude-haiku-4-5")
+
+        env = captured["env"]
+        assert env["HOME"] != "/real/home"

@@ -19,6 +19,7 @@ from binom_eval.runner import (
     DEFAULT_TIMEOUT_SECONDS,
     Runner,
     _model_probe_rejected,
+    fake_home_env,
     isolated_workdir,
     stripped_env,
 )
@@ -113,7 +114,10 @@ class ClaudeRunner(Runner):
         affect `repo_root` or a concurrent run; otherwise it runs in
         `repo_root` directly. `model` is assumed to be set and is always
         forwarded as `--model` so callers select a specific model for eval runs
-        without relying on the CLI default.
+        without relying on the CLI default. The run executes under a throwaway
+        `HOME` (`fake_home_env`) -- on top of `--bare --setting-sources ""` --
+        so no user-level config or skill root leaks in; the run authenticates
+        from `ANTHROPIC_API_KEY`, preserved in that scrubbed env.
         """
         cmd = [
             "claude",
@@ -130,13 +134,13 @@ class ClaudeRunner(Runner):
             "--model",
             model,
         ]
-        with isolated_workdir(repo_root, isolate) as workdir:
+        with isolated_workdir(repo_root, isolate) as workdir, fake_home_env() as env:
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 cwd=str(workdir),
-                env=stripped_env(),
+                env=env,
                 timeout=timeout,
             )
         skill_invoked, assistant_text, tool_uses, model = parse_stream_json(

@@ -312,20 +312,32 @@ class TestCursorRunnerVersion:
 
 
 class TestCursorRunnerPreflight:
-    def test_ready_when_cli_present(
+    def test_ready_when_cli_present_and_key_set(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
             cursor_runner.shutil, "which", lambda _n: "/usr/bin/cursor-agent"
         )
+        monkeypatch.setenv("CURSOR_API_KEY", "k")
         assert CursorRunner().preflight() is None
 
     def test_reports_missing_cli(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(cursor_runner.shutil, "which", lambda _n: None)
+        monkeypatch.setenv("CURSOR_API_KEY", "k")
         msg = CursorRunner().preflight()
         assert msg is not None and "cursor-agent CLI not found" in msg
+
+    def test_reports_missing_api_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            cursor_runner.shutil, "which", lambda _n: "/usr/bin/cursor-agent"
+        )
+        monkeypatch.delenv("CURSOR_API_KEY", raising=False)
+        msg = CursorRunner().preflight()
+        assert msg is not None and "CURSOR_API_KEY" in msg
 
 
 class TestCursorRunnerValidateModel:
@@ -387,6 +399,7 @@ class TestCursorRunnerRun:
         def fake_run(cmd: list[str], **kw: Any) -> Any:
             captured["cmd"] = cmd
             captured["cwd"] = kw.get("cwd")
+            captured["env"] = kw.get("env")
             return type("R", (), {"stdout": ""})()
 
         monkeypatch.setattr(subprocess, "run", fake_run)
@@ -454,3 +467,15 @@ class TestCursorRunnerRun:
         cmd = captured["cmd"]
         assert "--workspace" in cmd
         assert cmd[cmd.index("--workspace") + 1] == str(tmp_path)
+
+    def test_runs_under_isolated_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("HOME", "/real/home")
+        captured: dict[str, Any] = {}
+        self._stub_subprocess(monkeypatch, captured)
+
+        CursorRunner().run("do it", tmp_path, "demo", model="gpt-5")
+
+        env = captured["env"]
+        assert env["HOME"] != "/real/home"
