@@ -56,7 +56,7 @@ once per backend to grade on both.
 
 A skill's eval suite supplies:
 1. `evals.json` — prompts + assertion ids; supports `prompt_template` + `fixture` expansion.
-2. `_assertions.py` — `dict[str, Callable[[EvalRun], None]]` raising `AssertionError` on failure.
+2. `_assertions.py` — `dict[str, Callable[[EvalRun], None]]` raising `AssertionFailure` on failure (with optional labeled sections).
 3. `conftest.py` — calls `bind_eval_runs_fixture(eval_dir, skill_name, ASSERTION_HANDLERS)` and binds the result to `eval_runs`.
 4. `test_evals.py` — calls `register_live_eval_tests(globals(), ...)` which injects three test functions: `test_eval_assertion` (per eval×assertion), `test_eval_expectation` (per-eval rollup), and a trigger rollup.
 

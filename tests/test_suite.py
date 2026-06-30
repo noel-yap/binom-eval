@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from binom_eval import EvalRun, bind_eval_runs_fixture, register_live_eval_tests
+from binom_eval import AssertionFailure, EvalRun, bind_eval_runs_fixture, register_live_eval_tests
 
 
 def test_bind_eval_runs_fixture_delegates_to_make_eval_runs_fixture(
@@ -69,7 +69,7 @@ def test_register_live_eval_tests_attaches_skill_tests(
 
     def _checks_out(run: EvalRun) -> None:
         if "ok" not in run.assistant_text:
-            raise AssertionError("missing ok")
+            raise AssertionFailure("missing ok")
 
     handlers = {"checks-out": _checks_out}
     namespace: dict[str, object] = {"__name__": "fake_skill_evals"}

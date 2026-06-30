@@ -26,7 +26,9 @@ from binom_eval import (
     BATCH_FLOOR,
     FAIL_THRESHOLD,
     PASS_THRESHOLD,
+    AssertionFailure,
     EvalRun,
+    TrialFailure,
     _check_failures,
     _eval_checks,
     _trigger_check,
@@ -57,7 +59,8 @@ def _runs(*passed: bool) -> list[EvalRun]:
 
 
 def _skill_check(run: EvalRun) -> None:
-    assert run.skill_invoked, "miss"
+    if not run.skill_invoked:
+        raise AssertionFailure("miss")
 
 
 class TestBetainc:
@@ -141,12 +144,29 @@ class TestTriggerCheck:
 class TestTrialOutcomes:
     def test_records_pass_and_fail_per_trial(self) -> None:
         def check(run: EvalRun) -> None:
-            assert run.skill_invoked, "miss"
+            if not run.skill_invoked:
+                raise AssertionFailure("miss")
 
         outcomes = trial_outcomes(_runs(True, False), check)
         assert outcomes[0] == (0, None)
         assert outcomes[1][0] == 1
-        assert outcomes[1][1] is not None
+        assert outcomes[1][1] == TrialFailure("miss")
+
+    def test_captures_assertion_failure_sections(self) -> None:
+        def check(run: EvalRun) -> None:
+            raise AssertionFailure(
+                "structured miss",
+                sections=(("Input", "before"), ("Output", run.assistant_text)),
+            )
+
+        outcomes = trial_outcomes(
+            [EvalRun(eval_id="t", prompt="", skill_invoked=True, assistant_text="after")],
+            check,
+        )
+        assert outcomes[0][1] == TrialFailure(
+            "structured miss",
+            sections=(("Input", "before"), ("Output", "after")),
+        )
 
 
 class TestTrialOutcomesGrading:
@@ -158,18 +178,42 @@ class TestTrialOutcomesGrading:
         )
 
     def test_fails_when_posterior_below_bar(self) -> None:
-        outcomes = [(0, None), (1, "bad"), (2, "bad")]
+        outcomes = [
+            (0, None),
+            (1, TrialFailure("bad")),
+            (2, TrialFailure("bad")),
+        ]
         with pytest.raises(AssertionError, match=r"1/3 trials passed"):
             assert trial_outcomes_passed(outcomes, TARGET), (
                 trial_outcomes_failure_message(outcomes, TARGET, "x")
             )
 
     def test_failure_message_reports_p_good(self) -> None:
-        outcomes = [(0, "bad"), (1, "bad")]
+        outcomes = [(0, TrialFailure("bad")), (1, TrialFailure("bad"))]
         with pytest.raises(AssertionError, match=r"P\(rate >= 0\.667\)"):
             assert trial_outcomes_passed(outcomes, TARGET), (
                 trial_outcomes_failure_message(outcomes, TARGET, "x")
             )
+
+    def test_failure_message_renders_structured_sections(self) -> None:
+        outcomes = [
+            (
+                0,
+                TrialFailure(
+                    "isCacheStale not in output",
+                    sections=(
+                        ("Input", "export function isCacheStale() {}"),
+                        ("Output", "export function hasCacheExpired() {}"),
+                    ),
+                ),
+            )
+        ]
+        message = trial_outcomes_failure_message(outcomes, TARGET, "demo::check")
+        assert "trial 0: isCacheStale not in output" in message
+        assert "Input:" in message
+        assert "export function isCacheStale() {}" in message
+        assert "Output:" in message
+        assert "export function hasCacheExpired() {}" in message
 
 
 class TestFailingAssertions:
@@ -177,11 +221,13 @@ class TestFailingAssertions:
 
     @staticmethod
     def _skill(run: EvalRun) -> None:
-        assert run.skill_invoked, "skill"
+        if not run.skill_invoked:
+            raise AssertionFailure("skill")
 
     @staticmethod
     def _text(run: EvalRun) -> None:
-        assert run.assistant_text, "text"
+        if not run.assistant_text:
+            raise AssertionFailure("text")
 
     def _handlers(self) -> dict:
         return {"a": self._skill, "b": self._text}
@@ -377,7 +423,8 @@ class TestNextBatchSize:
 
     def test_takes_largest_shortfall_across_checks(self) -> None:
         def check_text(run: EvalRun) -> None:
-            assert run.assistant_text, "text"
+            if not run.assistant_text:
+                raise AssertionFailure("text")
 
         # skill_invoked: 4/5 (shortfall 4); assistant_text: 3/5 (shortfall 2).
         # Both undetermined; the larger shortfall drives the batch.
@@ -391,7 +438,8 @@ class TestNextBatchSize:
 
     def test_fail_locked_check_short_circuits_others(self) -> None:
         def check_text(run: EvalRun) -> None:
-            assert run.assistant_text, "text"
+            if not run.assistant_text:
+                raise AssertionFailure("text")
 
         # skill_invoked 4/5 (undetermined) but assistant_text 0/5 (FAIL-locked):
         # the eval already fails, so no further trials are run.

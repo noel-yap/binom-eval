@@ -131,7 +131,7 @@ A skill's eval suite supplies four things and lets `binom-eval` do the rest:
    may supply a literal `"prompt"` or a `"prompt_template"` + `"fixture"` pair;
    fixture paths are relative to the directory containing `evals.json`);
 2. **assertion handlers** — `dict[str, Callable[[EvalRun], None]]`, each
-   using `assert` (which raises `AssertionError` on failure);
+   raising `AssertionFailure` on failure;
 3. a **`conftest.py`** that binds the `eval_runs` fixture; and
 4. a **`test_evals.py`** that grades the runs.
 
@@ -200,6 +200,7 @@ consider_namespace_packages = true
 
 | Symbol | Purpose |
 | --- | --- |
+| `AssertionFailure` | Structured failure type for assertion handlers (`summary` + optional labeled `sections`). |
 | `make_eval_runs_fixture` | Build the session-scoped `eval_runs` pytest fixture. |
 | `bind_eval_runs_fixture`, `register_live_eval_tests` | Thin suite wiring for `conftest.py` / `test_evals.py`. |
 | `run_eval_adaptive`, `next_batch_size` | The adaptive trial driver. |

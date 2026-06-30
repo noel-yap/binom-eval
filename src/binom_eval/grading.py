@@ -37,6 +37,7 @@ import json
 import math
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,37 @@ FAIL_THRESHOLD = math.exp(-2)  # ~0.1353
 # because it forces a representative sample before the posterior is allowed
 # to commit -- markedly cuts the chance an unlucky streak fails a good skill.
 BATCH_FLOOR = 3
+
+# Per-section cap when rendering structured trial failures in pytest output.
+FAILURE_SECTION_MAX_CHARS = 2000
+
+
+@dataclass(eq=False)
+class AssertionFailure(AssertionError):
+    """Structured assertion failure raised by skill assertion handlers.
+
+    ``summary`` is one line for rollups; ``sections`` are skill-defined
+    ``(label, body)`` pairs the framework renders without interpreting.
+    Every assertion handler should raise this (with or without ``sections``)
+    rather than plain ``AssertionError``.
+    """
+
+    summary: str
+    sections: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        super().__init__(self.summary)
+
+    def __str__(self) -> str:
+        return self.summary
+
+
+@dataclass(frozen=True)
+class TrialFailure:
+    """Captured outcome when one trial's assertion handler fails."""
+
+    summary: str
+    sections: tuple[tuple[str, str], ...] = ()
 
 
 class Verdict(enum.Enum):
@@ -190,7 +222,10 @@ def eval_passed(passes: int, trials: int, target: float) -> bool:
 def _trigger_check(run: EvalRun) -> None:
     """Assertion-style check that the skill fired (for should_trigger evals)."""
     if not run.skill_invoked:
-        raise AssertionError("skill was not invoked")
+        raise AssertionFailure(
+            "skill was not invoked",
+            sections=(("Assistant reply", run.assistant_text or "(empty)"),),
+        )
 
 
 def _eval_checks(
@@ -216,7 +251,7 @@ def _eval_checks(
 def _check_failures(
     runs: list[EvalRun], check: Callable[[EvalRun], None]
 ) -> int:
-    """Number of `runs` for which `check` fails (raises AssertionError)."""
+    """Number of `runs` for which `check` fails (raises AssertionFailure)."""
     return sum(1 for _, err in trial_outcomes(runs, check) if err is not None)
 
 
@@ -420,22 +455,42 @@ def load_evals(
     return evals
 
 
+def _capture_trial_failure(exc: AssertionFailure) -> TrialFailure:
+    return TrialFailure(exc.summary, exc.sections)
+
+
+def _truncate_section_body(body: str, max_chars: int = FAILURE_SECTION_MAX_CHARS) -> str:
+    if len(body) <= max_chars:
+        return body
+    omitted = len(body) - max_chars
+    return f"{body[:max_chars]}\n... ({omitted} chars truncated)"
+
+
+def _format_trial_failure(idx: int, failure: TrialFailure) -> str:
+    lines = [f"  trial {idx}: {failure.summary}"]
+    for label, body in failure.sections:
+        lines.append(f"    {label}:")
+        for line in _truncate_section_body(body).splitlines():
+            lines.append(f"      {line}")
+    return "\n".join(lines)
+
+
 def trial_outcomes(
     runs: list[EvalRun], check: Callable[[EvalRun], None]
-) -> list[tuple[int, str | None]]:
+) -> list[tuple[int, TrialFailure | None]]:
     """Run `check` against each trial run, capturing its assertion result.
 
-    `check` is an assertion handler that raises ``AssertionError`` on
-    failure. Returns one ``(trial_index, error_or_None)`` per run, where
-    a ``None`` error means that trial passed.
+    `check` is an assertion handler that raises ``AssertionFailure`` on
+    failure. Returns one ``(trial_index, failure_or_None)`` per run, where
+    ``None`` means that trial passed.
     """
-    outcomes: list[tuple[int, str | None]] = []
+    outcomes: list[tuple[int, TrialFailure | None]] = []
     for idx, run in enumerate(runs):
         try:
             check(run)
             outcomes.append((idx, None))
-        except AssertionError as exc:
-            outcomes.append((idx, str(exc)))
+        except AssertionFailure as exc:
+            outcomes.append((idx, _capture_trial_failure(exc)))
     return outcomes
 
 
@@ -448,19 +503,22 @@ def trial_outcomes_passed(
 
 
 def trial_outcomes_failure_message(
-    outcomes: list[tuple[int, str | None]], target: float, label: str
+    outcomes: list[tuple[int, TrialFailure | None]], target: float, label: str
 ) -> str:
     """Human-readable failure detail for ``trial_outcomes_passed``.
 
     Pair with ``assert trial_outcomes_passed(outcomes, target),
     trial_outcomes_failure_message(outcomes, target, label)`` in per-skill
-    test modules.
+    test modules. Renders each failing trial's summary and any structured
+    sections without interpreting section labels.
     """
     passes = sum(1 for _, err in outcomes if err is None)
     trials = len(outcomes)
     p_good = posterior_pass_prob(passes, trials, target)
     detail = "\n".join(
-        f"  trial {idx}: {err}" for idx, err in outcomes if err is not None
+        _format_trial_failure(idx, err)
+        for idx, err in outcomes
+        if err is not None
     )
     return (
         f"{label}: {passes}/{trials} trials passed; "

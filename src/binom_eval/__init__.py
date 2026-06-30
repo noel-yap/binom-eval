@@ -46,6 +46,8 @@ from binom_eval.grading import (
     PASS_THRESHOLD,
     PRIOR_ALPHA,
     PRIOR_BETA,
+    AssertionFailure,
+    TrialFailure,
     _check_failures,
     _eval_checks,
     _trigger_check,
@@ -154,6 +156,8 @@ __all__ = [
     "stripped_env",
     "validate_model",
     # grading
+    "AssertionFailure",
+    "TrialFailure",
     "BATCH_FLOOR",
     "FAIL_THRESHOLD",
     "PASS_THRESHOLD",

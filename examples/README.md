@@ -7,7 +7,7 @@ consumer supplies:
 | File | Role |
 | --- | --- |
 | `evals.json` | The prompts, per-eval assertion ids, and `should_trigger` flags. |
-| `_assertions.py` | `ASSERTION_HANDLERS`: one handler per assertion id, each using `assert` (which raises `AssertionError` on failure). Built on `binom_eval`'s text helpers. |
+| `_assertions.py` | `ASSERTION_HANDLERS`: one handler per assertion id, each raising `AssertionFailure` on failure. Built on `binom_eval`'s text helpers. |
 | `conftest.py` | Binds the session-scoped `eval_runs` fixture via `bind_eval_runs_fixture(...)`. |
 | `test_evals.py` | Registers the standard live-eval tests via `register_live_eval_tests(...)`. |
 
