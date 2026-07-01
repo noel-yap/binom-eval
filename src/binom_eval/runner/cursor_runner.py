@@ -39,6 +39,7 @@ from typing import Any
 from binom_eval.runner import (
     DEFAULT_TIMEOUT_SECONDS,
     Runner,
+    _format_model_error,
     fake_home_env,
     isolated_workdir,
     stripped_env,
@@ -207,7 +208,7 @@ class CursorRunner(Runner):
         listed = proc.stdout.split()
         if not listed or model in listed:
             return None
-        return f"model not found: {model}"
+        return _format_model_error(f"model not found: {model}", listed)
 
     def run(
         self,

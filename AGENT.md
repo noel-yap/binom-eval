@@ -40,7 +40,7 @@ once per backend to grade on both.
 | `grading.py` | Beta-binomial math (`posterior_pass_prob`, `eval_passed`), adaptive trial driver (`run_eval_adaptive`, `next_batch_size`), grading rollups |
 | `plugin.py` | pytest integration: `--live-eval-*` CLI options, `live_eval` marker, `make_eval_runs_fixture` |
 | `suite.py` | Thin consumer wiring: `bind_eval_runs_fixture` (for `conftest.py`) and `register_live_eval_tests` (for `test_evals.py`) |
-| `runner/` | subprocess layer: the `Runner` backends (`ClaudeRunner`, `CursorRunner`) selected by `resolve_runner` from a `backend:model` spec, the throttled `run_claude_batch` (shared `threading.Semaphore`), per-backend `preflight`/`validate_model`, and `isolated_workdir` |
+| `runner/` | subprocess layer: the `Runner` backends (`ClaudeRunner`, `CursorRunner`) selected by `resolve_runner` from a `backend:model` spec, the throttled `run_claude_batch` (shared `threading.Semaphore`), per-backend `preflight`/`validate_model`, and `isolated_workdir`; `retry.py` holds `HttpRetryPolicy` (deadline-aware back-off loop reused by backends) |
 | `stream_json.py` | `EvalRun` dataclass, `parse_stream_json` (parses `claude -p` stdout), skill/agent invocation predicates |
 | `text_utils.py` | Pure text/regex helpers for assertion modules |
 

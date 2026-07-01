@@ -10,25 +10,94 @@ package root alongside the interface.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from binom_eval.runner import (
     DEFAULT_TIMEOUT_SECONDS,
     Runner,
+    _format_model_error,
     _model_probe_rejected,
     fake_home_env,
     isolated_workdir,
     stripped_env,
 )
+from binom_eval.runner.retry import HttpRetryPolicy
 from binom_eval.stream_json import EvalRun, parse_stream_json
 
 # Live evals run under a throwaway HOME so the invoking user's skill roots never
 # leak in, but still load project skills from the run's workspace via
 # `--setting-sources project` (not an empty source list, which would hide them).
 CLAUDE_SETTING_SOURCES = "project"
+
+# CLI aliases accepted by `claude --model` that are not returned as API model IDs.
+CLAUDE_MODEL_ALIASES = frozenset({"fable", "haiku", "opus", "sonnet"})
+
+_MODELS_API_RETRY = HttpRetryPolicy(
+    max_attempts=3,
+    base_delay_seconds=0.25,
+    max_delay_seconds=2.0,
+    retryable_http=frozenset({429, 500, 502, 503, 504}),
+)
+
+
+def _parse_anthropic_models_payload(payload: object) -> list[str]:
+    """Extract model IDs from a Models API response body."""
+    if not isinstance(payload, dict):
+        raise ValueError("unexpected models payload")
+    data = payload.get("data")
+    if not isinstance(data, list):
+        raise ValueError("unexpected models payload")
+    ids = [
+        str(item["id"])
+        for item in data
+        if isinstance(item, dict) and item.get("id")
+    ]
+    if not ids:
+        raise ValueError("empty models list")
+    return ids
+
+
+def _fetch_anthropic_model_ids_once(
+    req: urllib.request.Request, timeout: float
+) -> list[str]:
+    """One Models API request; raises on transport or payload errors."""
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        payload = json.loads(resp.read().decode())
+    return _parse_anthropic_models_payload(payload)
+
+
+def _anthropic_model_ids(timeout: int = 30) -> list[str] | None:
+    """Return model IDs from the Anthropic Models API, or None when unavailable."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/models?limit=100",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+    )
+    return _MODELS_API_RETRY.execute(
+        lambda remaining: _fetch_anthropic_model_ids_once(req, remaining),
+        timeout,
+        transport_errors=(TimeoutError, urllib.error.URLError),
+        fatal_errors=(json.JSONDecodeError, KeyError, TypeError, ValueError),
+    )
+
+
+def _model_in_anthropic_list(model: str, ids: list[str]) -> bool:
+    """True when `model` is a listed ID, a known CLI alias, or an ID prefix."""
+    if model in CLAUDE_MODEL_ALIASES or model in ids:
+        return True
+    prefix = model + "-"
+    return any(api_id.startswith(prefix) for api_id in ids)
 
 
 class ClaudeRunner(Runner):
@@ -68,15 +137,18 @@ class ClaudeRunner(Runner):
     def validate_model(self, model: str, timeout: int = 30) -> str | None:
         """Confirm the `claude` CLI can use `model`; return an error or None.
 
-        Runs one trivial `claude -p` probe with `--model model`. Returns None
-        when the model is usable, or the CLI's error message when the model
-        does not exist or the account cannot access it (the CLI reports
-        `model_not_found` / HTTP 404). The probe is cheap: a bad model is
-        rejected in ~1s at zero cost, a good one costs a single short turn.
-        Transport failures (CLI absent, timeout) return None so a flaky probe
-        never blocks a run that might otherwise succeed -- the real trials will
-        surface any genuine outage.
+        Prefetches available model IDs from the Anthropic Models API and
+        rejects unknown models without spawning a probe when the list is
+        readable. Falls back to a cheap `claude -p` probe when the API cannot
+        be reached so a flaky lookup never blocks a run that might otherwise
+        succeed -- the real trials will surface any genuine outage.
         """
+        listed = _anthropic_model_ids(timeout)
+        if listed is not None:
+            if _model_in_anthropic_list(model, listed):
+                return None
+            return _format_model_error(f"model not found: {model}", listed)
+
         cmd = [
             "claude",
             "-p",

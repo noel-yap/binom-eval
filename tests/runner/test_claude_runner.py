@@ -9,7 +9,11 @@ checked without invoking the CLI. `version` and `validate_model` stub only
 
 from __future__ import annotations
 
+import io
+import json
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +21,7 @@ import pytest
 
 from binom_eval import EvalRun
 from binom_eval.runner import claude_runner
+from binom_eval.runner import retry as runner_retry
 from binom_eval.runner.claude_runner import ClaudeRunner
 
 
@@ -51,6 +56,16 @@ class TestClaudeRunnerVersion:
 
 
 class TestClaudeRunnerValidateModel:
+    _LISTED = ["claude-haiku-4-5-20251001", "claude-opus-4-8-20250101"]
+
+    @staticmethod
+    def _stub_api_list(
+        monkeypatch: pytest.MonkeyPatch, ids: list[str] | None
+    ) -> None:
+        monkeypatch.setattr(
+            claude_runner, "_anthropic_model_ids", lambda _timeout=30: ids
+        )
+
     # Trimmed stream-json from a `--model <bad>` probe: an is_error 404 result.
     _BAD = (
         '{"type":"assistant","message":{"model":"<synthetic>"},'
@@ -65,9 +80,56 @@ class TestClaudeRunnerValidateModel:
         '"result":"ok"}\n'
     )
 
+    def test_accepts_exact_model_id_from_api_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._stub_api_list(monkeypatch, self._LISTED)
+        called: list[object] = []
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **kw: called.append(a) or type("R", (), {"stdout": ""})(),
+        )
+        assert (
+            ClaudeRunner().validate_model("claude-haiku-4-5-20251001") is None
+        )
+        assert called == []
+
+    def test_accepts_model_prefix_from_api_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._stub_api_list(monkeypatch, self._LISTED)
+        assert ClaudeRunner().validate_model("claude-opus-4-8") is None
+
+    def test_accepts_cli_alias_from_api_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._stub_api_list(monkeypatch, self._LISTED)
+        assert ClaudeRunner().validate_model("haiku") is None
+
+    def test_reports_bad_model_from_api_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._stub_api_list(monkeypatch, self._LISTED)
+        called: list[object] = []
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **kw: called.append(a) or type("R", (), {"stdout": ""})(),
+        )
+        msg = ClaudeRunner().validate_model("nope")
+        assert msg is not None and "model not found: nope" in msg
+        assert (
+            "valid models: claude-haiku-4-5-20251001, claude-opus-4-8-20250101"
+            in msg
+        )
+        assert called == []
+
     def test_returns_none_when_cli_absent(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        self._stub_api_list(monkeypatch, None)
+
         def raise_fnf(*a: object, **kw: object) -> None:
             raise FileNotFoundError
 
@@ -77,15 +139,18 @@ class TestClaudeRunnerValidateModel:
     def test_returns_none_on_timeout(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        self._stub_api_list(monkeypatch, None)
+
         def raise_timeout(*a: object, **kw: object) -> None:
             raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
 
         monkeypatch.setattr(subprocess, "run", raise_timeout)
         assert ClaudeRunner().validate_model("haiku") is None
 
-    def test_reports_bad_model_from_stdout(
+    def test_falls_back_to_probe_when_api_list_unavailable(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        self._stub_api_list(monkeypatch, None)
         monkeypatch.setattr(
             subprocess,
             "run",
@@ -93,16 +158,119 @@ class TestClaudeRunnerValidateModel:
         )
         msg = ClaudeRunner().validate_model("bad")
         assert msg is not None and "may not exist" in msg
+        assert "valid models" not in msg
 
-    def test_accepts_good_model_from_stdout(
+    def test_accepts_good_model_from_probe_when_api_list_unavailable(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        self._stub_api_list(monkeypatch, None)
         monkeypatch.setattr(
             subprocess,
             "run",
             lambda *a, **kw: type("R", (), {"stdout": self._GOOD})(),
         )
         assert ClaudeRunner().validate_model("haiku") is None
+
+
+class TestModelInAnthropicList:
+    def test_matches_exact_id(self) -> None:
+        ids = ["claude-haiku-4-5-20251001"]
+        assert claude_runner._model_in_anthropic_list(
+            "claude-haiku-4-5-20251001", ids
+        )
+
+    def test_matches_id_prefix(self) -> None:
+        ids = ["claude-opus-4-8-20250101"]
+        assert claude_runner._model_in_anthropic_list("claude-opus-4-8", ids)
+
+    def test_matches_cli_alias(self) -> None:
+        assert claude_runner._model_in_anthropic_list("sonnet", [])
+
+    def test_rejects_unknown_model(self) -> None:
+        ids = ["claude-haiku-4-5-20251001"]
+        assert not claude_runner._model_in_anthropic_list("nope", ids)
+
+
+class TestAnthropicModelsApi:
+    _PAYLOAD = {"data": [{"id": "claude-haiku-4-5-20251001"}]}
+
+    @staticmethod
+    def _http_error(code: int) -> urllib.error.HTTPError:
+        return urllib.error.HTTPError(
+            "https://api.anthropic.com/v1/models?limit=100",
+            code,
+            "err",
+            hdrs=None,
+            fp=io.BytesIO(b""),
+        )
+
+    @staticmethod
+    def _ok_response() -> urllib.request.addinfourl:
+        body = json.dumps(TestAnthropicModelsApi._PAYLOAD).encode()
+        return urllib.request.addinfourl(io.BytesIO(body), {}, url="")
+
+    def test_backoff_delay_is_jittered_within_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(runner_retry.random, "uniform", lambda _a, b: b)
+        assert claude_runner._MODELS_API_RETRY.backoff_delay(0) == 0.25
+        assert claude_runner._MODELS_API_RETRY.backoff_delay(1) == 0.5
+        assert claude_runner._MODELS_API_RETRY.backoff_delay(10) == 2.0
+
+    def test_retryable_http_codes(self) -> None:
+        assert claude_runner._MODELS_API_RETRY.is_retryable(self._http_error(503))
+        assert not claude_runner._MODELS_API_RETRY.is_retryable(self._http_error(401))
+
+    def test_retries_transient_error_then_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = {"n": 0}
+
+        def fake_urlopen(_req: object, timeout: float) -> object:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise self._http_error(503)
+            return self._ok_response()
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(runner_retry.time, "sleep", lambda _delay: None)
+
+        ids = claude_runner._anthropic_model_ids()
+        assert ids == ["claude-haiku-4-5-20251001"]
+        assert calls["n"] == 3
+
+    def test_does_not_retry_auth_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = {"n": 0}
+
+        def fake_urlopen(_req: object, timeout: float) -> object:
+            calls["n"] += 1
+            raise self._http_error(401)
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(runner_retry.time, "sleep", lambda _delay: None)
+
+        assert claude_runner._anthropic_model_ids() is None
+        assert calls["n"] == 1
+
+    def test_gives_up_after_max_attempts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = {"n": 0}
+
+        def fake_urlopen(_req: object, timeout: float) -> object:
+            calls["n"] += 1
+            raise TimeoutError
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(runner_retry.time, "sleep", lambda _delay: None)
+
+        assert claude_runner._anthropic_model_ids() is None
+        assert calls["n"] == claude_runner._MODELS_API_RETRY.max_attempts
 
 
 class TestClaudeRunnerPreflight:

@@ -233,6 +233,26 @@ class TestIsolatedWorkdir:
 class TestModelProbeRejected:
     """Unit tests for the pure probe-parser behind `validate_model`."""
 
+    def test_format_model_error_appends_sorted_valid_models(self) -> None:
+        from binom_eval.runner import _format_model_error
+
+        msg = _format_model_error(
+            "model not found: bad",
+            ["claude-opus-4-8", "claude-haiku-4-5", "claude-opus-4-8"],
+        )
+        assert msg == (
+            "model not found: bad; valid models: claude-haiku-4-5, claude-opus-4-8"
+        )
+
+    def test_format_model_error_leaves_message_unchanged_without_models(
+        self,
+    ) -> None:
+        from binom_eval.runner import _format_model_error
+
+        assert _format_model_error("model not found: bad", None) == (
+            "model not found: bad"
+        )
+
     # Trimmed stream-json from `claude -p --model <bad> --output-format
     # stream-json`: a synthetic assistant turn plus an is_error 404 result.
     _BAD = (
