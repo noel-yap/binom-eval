@@ -182,6 +182,17 @@ pytest path/to/evals -m live_eval \
     --live-eval-model claude-sonnet-4-6
 ```
 
+An unknown model is rejected before any trial runs. For the `claude` backend
+the harness queries the Anthropic Models API to validate the model and, when
+the model is not found, includes the list of valid models in the error:
+
+```
+model not found: claude-nope; valid models: claude-haiku-4-5-20251001, ...
+```
+
+If the API is unreachable the harness falls back to a cheap `claude -p` probe
+so a transient network hiccup never blocks a run that might otherwise succeed.
+
 See [`examples/`](examples/) for the full consumer pattern, including
 `_assertions.py` text helpers and the `should_trigger` skill-invocation check.
 

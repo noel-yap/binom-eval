@@ -388,6 +388,7 @@ class TestCursorRunnerValidateModel:
         self._stub_list_models(monkeypatch, "gpt-5\nopus-4.1\n")
         msg = CursorRunner().validate_model("sonnet-4.5")
         assert msg is not None and "sonnet-4.5" in msg
+        assert "valid models: gpt-5, opus-4.1" in msg
 
 
 class TestCursorRunnerRun:

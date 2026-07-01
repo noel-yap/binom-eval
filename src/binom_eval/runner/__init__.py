@@ -131,6 +131,16 @@ def _model_probe_rejected(stdout: str) -> str | None:
     return (message or "model not found") if rejected else None
 
 
+def _format_model_error(
+    message: str, valid_models: list[str] | None = None
+) -> str:
+    """Append a sorted valid-models suffix when the backend could enumerate them."""
+    if not valid_models:
+        return message
+    known = ", ".join(sorted(set(valid_models)))
+    return f"{message}; valid models: {known}"
+
+
 @contextlib.contextmanager
 def isolated_workdir(repo_root: Path, isolate: bool) -> Iterator[Path]:
     """Yield the working directory for a single run.
