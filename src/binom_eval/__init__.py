@@ -50,6 +50,7 @@ from binom_eval.grading import (
     TrialFailure,
     _check_failures,
     _eval_checks,
+    _no_other_skill_check,
     _trigger_check,
     assert_handler_coverage,
     eval_passed,

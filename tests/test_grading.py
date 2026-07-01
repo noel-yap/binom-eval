@@ -31,6 +31,7 @@ from binom_eval import (
     TrialFailure,
     _check_failures,
     _eval_checks,
+    _no_other_skill_check,
     _trigger_check,
     assert_handler_coverage,
     eval_passed,
@@ -347,6 +348,77 @@ class TestEvalChecks:
         item = {"assertions": [{"id": "missing"}]}
         assert _eval_checks(item, {}) == []
 
+    def test_appends_no_other_skill_check_when_skill_name_given(self) -> None:
+        item = {"assertions": [], "should_trigger": True}
+        checks = _eval_checks(item, {}, skill_name="my-skill")
+        assert len(checks) == 2  # trigger + no-other-skill
+
+    def test_no_other_skill_check_omitted_when_skill_name_absent(self) -> None:
+        item = {"assertions": [], "should_trigger": True}
+        assert len(_eval_checks(item, {})) == 1  # trigger only, no skill_name
+
+
+
+class TestNoOtherSkillCheck:
+    """_no_other_skill_check raises when any other skill fires."""
+
+    @staticmethod
+    def _run(tool_uses: list) -> EvalRun:
+        return EvalRun(
+            eval_id="t", prompt="", skill_invoked=True,
+            assistant_text="", tool_uses=tool_uses,
+        )
+
+    def test_passes_when_no_tool_uses(self) -> None:
+        _no_other_skill_check("my-skill")(self._run([]))
+
+    def test_passes_when_only_target_skill_tool_used(self) -> None:
+        block = {"type": "tool_use", "name": "Skill", "input": {"skill": "my-skill"}}
+        _no_other_skill_check("my-skill")(self._run([block]))
+
+    def test_fails_when_other_skill_tool_used(self) -> None:
+        block = {"type": "tool_use", "name": "Skill", "input": {"skill": "other-skill"}}
+        with pytest.raises(AssertionFailure, match="other-skill"):
+            _no_other_skill_check("my-skill")(self._run([block]))
+
+    def test_fails_when_other_skill_read_via_skill_md(self) -> None:
+        block = {
+            "type": "tool_use",
+            "name": "Read",
+            "input": {"path": "/repo/other-skill/SKILL.md"},
+        }
+        with pytest.raises(AssertionFailure, match="other-skill"):
+            _no_other_skill_check("my-skill")(self._run([block]))
+
+    def test_passes_when_target_skill_read_via_skill_md(self) -> None:
+        block = {
+            "type": "tool_use",
+            "name": "Read",
+            "input": {"path": "/repo/my-skill/SKILL.md"},
+        }
+        _no_other_skill_check("my-skill")(self._run([block]))
+
+    def test_passes_when_read_targets_unrelated_file(self) -> None:
+        block = {
+            "type": "tool_use",
+            "name": "Read",
+            "input": {"path": "/repo/my-skill/README.md"},
+        }
+        _no_other_skill_check("my-skill")(self._run([block]))
+
+    def test_failure_message_names_the_other_skill(self) -> None:
+        block = {"type": "tool_use", "name": "Skill", "input": {"skill": "intruder"}}
+        with pytest.raises(AssertionFailure) as exc_info:
+            _no_other_skill_check("my-skill")(self._run([block]))
+        assert "intruder" in str(exc_info.value)
+
+    def test_failure_includes_tool_uses_section(self) -> None:
+        block = {"type": "tool_use", "name": "Skill", "input": {"skill": "intruder"}}
+        with pytest.raises(AssertionFailure) as exc_info:
+            _no_other_skill_check("my-skill")(self._run([block]))
+        labels = [label for label, _ in exc_info.value.sections]
+        assert "Tool uses" in labels
+
 
 class TestCheckFailures:
     def test_counts_failing_runs(self) -> None:
@@ -606,3 +678,43 @@ class TestExpandEvals:
         assert "prompt_template" not in result
         assert "fixture" not in result
         assert result["prompt"] == "Content:\nfixture body\n"
+
+    def test_appends_skill_constraint_for_should_trigger_evals(
+        self, tmp_path: Path
+    ) -> None:
+        # Simulate the real layout: {skill}/evals/{lang}/  so that
+        # eval_dir.parents[1].name yields the skill name.
+        skill_dir = tmp_path / "my-skill" / "evals" / "typescript"
+        skill_dir.mkdir(parents=True)
+        fixture = skill_dir / "sample.ts"
+        fixture.write_text("const x = 1;\n")
+        result = expand_eval_item(
+            {
+                "id": "demo",
+                "prompt_template": "Refactor:\n{fixture}",
+                "fixture": "sample.ts",
+                "should_trigger": True,
+                "assertions": [],
+            },
+            skill_dir,
+        )
+        assert "Use only the `my-skill` skill." in result["prompt"]
+        assert "Do not invoke any other skill." in result["prompt"]
+
+    def test_no_skill_constraint_without_should_trigger(
+        self, tmp_path: Path
+    ) -> None:
+        skill_dir = tmp_path / "my-skill" / "evals" / "typescript"
+        skill_dir.mkdir(parents=True)
+        fixture = skill_dir / "sample.ts"
+        fixture.write_text("const x = 1;\n")
+        result = expand_eval_item(
+            {
+                "id": "demo",
+                "prompt_template": "Refactor:\n{fixture}",
+                "fixture": "sample.ts",
+                "assertions": [],
+            },
+            skill_dir,
+        )
+        assert "Use only" not in result["prompt"]

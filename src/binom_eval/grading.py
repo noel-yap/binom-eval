@@ -228,12 +228,45 @@ def _trigger_check(run: EvalRun) -> None:
         )
 
 
+def _no_other_skill_check(skill_name: str) -> Callable[[EvalRun], None]:
+    """Return a check that fails when any skill other than ``skill_name`` fires.
+
+    Covers both invocation styles: the ``Skill`` tool (Claude Code) and a
+    ``Read`` of ``{skill}/SKILL.md`` (Cursor). When another skill is detected
+    the failure message names it so the cause is immediately clear.
+    """
+    def check(run: EvalRun) -> None:
+        other: list[str] = []
+        for block in run.tool_uses:
+            if block.get("name") == "Skill":
+                invoked = block.get("input", {}).get("skill", "")
+                if invoked != skill_name:
+                    other.append(invoked or str(block.get("input", {})))
+            elif block.get("name") == "Read":
+                payload = block.get("input", {})
+                raw = str(
+                    payload.get("path") or payload.get("file_path") or ""
+                ).replace("\\", "/")
+                parts = raw.split("/")
+                if "SKILL.md" in parts and f"/{skill_name}/SKILL.md" not in raw:
+                    idx = parts.index("SKILL.md")
+                    other.append(parts[idx - 1] if idx > 0 else raw)
+        if other:
+            raise AssertionFailure(
+                f"unexpected skill(s) invoked: {', '.join(other)}",
+                sections=(("Tool uses", str(run.tool_uses)),),
+            )
+    return check
+
+
 def _eval_checks(
     item: dict[str, Any],
     assertion_handlers: dict[str, Callable[[EvalRun], None]],
+    skill_name: str | None = None,
 ) -> list[Callable[[EvalRun], None]]:
     """The pass/fail checks that decide an eval: its registered assertion
-    handlers plus, for should_trigger evals, the skill-invocation check.
+    handlers plus, for should_trigger evals, the skill-invocation check and
+    a check that no other skill was used.
 
     These are exactly the checks whose per-trial outcomes determine whether
     further trials could still change the verdict.
@@ -245,6 +278,8 @@ def _eval_checks(
     ]
     if item.get("should_trigger"):
         checks.append(_trigger_check)
+        if skill_name:
+            checks.append(_no_other_skill_check(skill_name))
     return checks
 
 
@@ -408,12 +443,25 @@ def assert_handler_coverage(
 
 
 def expand_eval_item(item: dict[str, Any], eval_dir: Path) -> dict[str, Any]:
-    """Return one eval dict with ``prompt_template`` + ``fixture`` expanded."""
+    """Return one eval dict with ``prompt_template`` + ``fixture`` expanded.
+
+    For ``should_trigger`` evals the prompt is extended with a constraint
+    naming the only skill that should be used. The skill name is derived from
+    the directory layout: ``evals.json`` sits two levels below the skill root
+    (``{skill}/evals/{lang}/evals.json``), so ``eval_dir.parents[1].name``
+    is the skill name without needing a redundant field in ``evals.json``.
+    """
     expanded = dict(item)
     fixture = expanded.pop("fixture", None)
     template = expanded.pop("prompt_template", None)
     if fixture is not None and template is not None:
         content = (eval_dir / fixture).read_text(encoding="utf-8")
+        if expanded.get("should_trigger"):
+            skill_name = eval_dir.parents[1].name
+            template += (
+                f"\n\nUse only the `{skill_name}` skill."
+                " Do not invoke any other skill."
+            )
         expanded["prompt"] = template.format(fixture=content)
         expanded["prompt_input"] = content
     elif fixture is not None or template is not None:
