@@ -21,7 +21,8 @@ only as many trials as the verdict needs. The package is split by concern:
     `eval_passed`), the adaptive trial driver (`next_batch_size`,
     `run_eval_adaptive`), and the rollups used to grade a batch.
   * `plugin` -- the pytest options, the `live_eval` marker,
-    `live_eval_target_rate`, and `make_eval_runs_fixture`. Registered as a
+    `live_eval_target_rate`, `live_eval_failure_max_chars`, and
+    `make_eval_runs_fixture`. Registered as a
     pytest plugin (entry point `pytest11`), so installing the package wires
     up the `--live-eval-*` options and the `live_eval` marker automatically.
 
@@ -42,6 +43,7 @@ from __future__ import annotations
 
 from binom_eval.grading import (
     BATCH_FLOOR,
+    FAILURE_SECTION_MAX_CHARS,
     FAIL_THRESHOLD,
     PASS_THRESHOLD,
     PRIOR_ALPHA,
@@ -69,6 +71,7 @@ from binom_eval.plugin import (
     DEFAULT_CONCURRENCY,
     DEFAULT_MAX_TRIALS,
     DEFAULT_TARGET_RATE,
+    live_eval_failure_max_chars,
     live_eval_target_rate,
     make_eval_runs_fixture,
     pytest_addoption,
@@ -159,6 +162,7 @@ __all__ = [
     "AssertionFailure",
     "TrialFailure",
     "BATCH_FLOOR",
+    "FAILURE_SECTION_MAX_CHARS",
     "FAIL_THRESHOLD",
     "PASS_THRESHOLD",
     "PRIOR_ALPHA",
@@ -180,6 +184,7 @@ __all__ = [
     "DEFAULT_CONCURRENCY",
     "DEFAULT_MAX_TRIALS",
     "DEFAULT_TARGET_RATE",
+    "live_eval_failure_max_chars",
     "live_eval_target_rate",
     "make_eval_runs_fixture",
     "pytest_addoption",

@@ -62,6 +62,8 @@ FAIL_THRESHOLD = math.exp(-2)  # ~0.1353
 BATCH_FLOOR = 3
 
 # Per-section cap when rendering structured trial failures in pytest output.
+# Overridable per run via `--live-eval-failure-max-chars`; zero or negative
+# disables truncation.
 FAILURE_SECTION_MAX_CHARS = 2000
 
 
@@ -460,18 +462,24 @@ def _capture_trial_failure(exc: AssertionFailure) -> TrialFailure:
     return TrialFailure(exc.summary, exc.sections)
 
 
-def _truncate_section_body(body: str, max_chars: int = FAILURE_SECTION_MAX_CHARS) -> str:
-    if len(body) <= max_chars:
+def _truncate_section_body(
+    body: str, max_chars: int = FAILURE_SECTION_MAX_CHARS
+) -> str:
+    if max_chars <= 0 or len(body) <= max_chars:
         return body
     omitted = len(body) - max_chars
     return f"{body[:max_chars]}\n... ({omitted} chars truncated)"
 
 
-def _format_trial_failure(idx: int, failure: TrialFailure) -> str:
+def _format_trial_failure(
+    idx: int,
+    failure: TrialFailure,
+    max_chars: int = FAILURE_SECTION_MAX_CHARS,
+) -> str:
     lines = [f"  trial {idx}: {failure.summary}"]
     for label, body in failure.sections:
         lines.append(f"    {label}:")
-        for line in _truncate_section_body(body).splitlines():
+        for line in _truncate_section_body(body, max_chars).splitlines():
             lines.append(f"      {line}")
     return "\n".join(lines)
 
@@ -504,20 +512,26 @@ def trial_outcomes_passed(
 
 
 def trial_outcomes_failure_message(
-    outcomes: list[tuple[int, TrialFailure | None]], target: float, label: str
+    outcomes: list[tuple[int, TrialFailure | None]],
+    target: float,
+    label: str,
+    *,
+    max_chars: int = FAILURE_SECTION_MAX_CHARS,
 ) -> str:
     """Human-readable failure detail for ``trial_outcomes_passed``.
 
     Pair with ``assert trial_outcomes_passed(outcomes, target),
     trial_outcomes_failure_message(outcomes, target, label)`` in per-skill
     test modules. Renders each failing trial's summary and any structured
-    sections without interpreting section labels.
+    sections without interpreting section labels. ``max_chars`` caps each
+    rendered section body (wired to ``--live-eval-failure-max-chars`` by the
+    registered tests); zero or negative disables truncation.
     """
     passes = sum(1 for _, err in outcomes if err is None)
     trials = len(outcomes)
     p_good = posterior_pass_prob(passes, trials, target)
     detail = "\n".join(
-        _format_trial_failure(idx, err)
+        _format_trial_failure(idx, err, max_chars)
         for idx, err in outcomes
         if err is not None
     )

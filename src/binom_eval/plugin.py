@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from binom_eval.grading import (
+    FAILURE_SECTION_MAX_CHARS,
     PASS_THRESHOLD,
     _eval_checks,
     load_evals,
@@ -157,6 +158,18 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "run targets a named harness. Known backends: claude, cursor."
         ),
     )
+    parser.addoption(
+        "--live-eval-failure-max-chars",
+        action="store",
+        type=int,
+        default=FAILURE_SECTION_MAX_CHARS,
+        help=(
+            "Per-section character cap when a failing trial's structured "
+            "sections are rendered in pytest output. Zero or negative "
+            "disables truncation. Default "
+            f"{FAILURE_SECTION_MAX_CHARS}."
+        ),
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -281,3 +294,9 @@ def make_eval_runs_fixture(
 def live_eval_target_rate(pytestconfig: pytest.Config) -> float:
     """The target true pass rate the verdict grades each check against."""
     return pytestconfig.getoption("--live-eval-target-rate")
+
+
+@pytest.fixture(scope="session")
+def live_eval_failure_max_chars(pytestconfig: pytest.Config) -> int:
+    """Per-section character cap for rendered trial-failure sections."""
+    return pytestconfig.getoption("--live-eval-failure-max-chars")

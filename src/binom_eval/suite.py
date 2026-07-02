@@ -110,6 +110,7 @@ def register_live_eval_tests(
     def test_eval_assertion(
         eval_runs: dict[str, list[EvalRun]],
         live_eval_target_rate: float,
+        live_eval_failure_max_chars: int,
         eval_id: str,
         assertion_id: str,
     ) -> None:
@@ -118,7 +119,10 @@ def register_live_eval_tests(
         label = f"{eval_id}::{assertion_id}"
         assert trial_outcomes_passed(outcomes, live_eval_target_rate), (
             trial_outcomes_failure_message(
-                outcomes, live_eval_target_rate, label
+                outcomes,
+                live_eval_target_rate,
+                label,
+                max_chars=live_eval_failure_max_chars,
             )
         )
 

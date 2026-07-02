@@ -20,7 +20,8 @@ pytest path/to/evals -m live_eval \
     --live-eval-max-trials 12 \
     --live-eval-concurrency 8 \
     --live-eval-isolate \
-    --live-eval-model claude:claude-sonnet-4-6
+    --live-eval-model claude:claude-sonnet-4-6 \
+    --live-eval-failure-max-chars 10000
 ```
 
 `--live-eval-model` is required for live evals and selects the backend and
@@ -28,6 +29,9 @@ model as `backend:model` (known backends: `claude`, `cursor`). The `backend:`
 prefix is mandatory — a bare model with no prefix is an error — so each run
 targets a named harness. Each pytest run targets a single backend; run pytest
 once per backend to grade on both.
+
+`--live-eval-failure-max-chars` caps each failure section rendered in pytest
+output (default 2000; zero or negative disables truncation).
 
 ## Architecture
 
