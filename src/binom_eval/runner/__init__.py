@@ -98,7 +98,7 @@ def fake_home_env() -> Iterator[dict[str, str]]:
     removed when the run ends.
     """
     env = stripped_env()
-    with tempfile.TemporaryDirectory(prefix="binom-eval-home-") as home:
+    with tempfile.TemporaryDirectory(prefix="binom-eval-home-", ignore_cleanup_errors=True) as home:
         env["HOME"] = home
         env["USERPROFILE"] = home
         yield env
@@ -162,7 +162,7 @@ def isolated_workdir(repo_root: Path, isolate: bool) -> Iterator[Path]:
     if not isolate:
         yield repo_root
         return
-    with tempfile.TemporaryDirectory(prefix="binom-eval-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="binom-eval-", ignore_cleanup_errors=True) as tmp:
         dest = Path(tmp) / repo_root.name
         shutil.copytree(
             repo_root,
