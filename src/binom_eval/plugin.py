@@ -239,7 +239,7 @@ def make_eval_runs_fixture(
         evals = load_evals(evals_path, assertion_handlers)
 
         def build(item: dict[str, Any]) -> list[EvalRun]:
-            checks = _eval_checks(item, assertion_handlers)
+            checks = _eval_checks(item, assertion_handlers, skill_name)
             return run_eval_adaptive(
                 item,
                 repo_root,
