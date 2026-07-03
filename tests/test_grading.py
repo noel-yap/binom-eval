@@ -24,6 +24,7 @@ import pytest
 import binom_eval
 from binom_eval import (
     BATCH_FLOOR,
+    FAILURE_SECTION_MAX_CHARS,
     FAIL_THRESHOLD,
     PASS_THRESHOLD,
     AssertionFailure,
@@ -290,6 +291,37 @@ class TestTrialOutcomesGrading:
         assert "export function isCacheStale() {}" in message
         assert "Output:" in message
         assert "export function hasCacheExpired() {}" in message
+
+    @staticmethod
+    def _long_body_outcomes(body: str) -> list[tuple[int, TrialFailure]]:
+        return [(0, TrialFailure("miss", sections=(("Output", body),)))]
+
+    def test_failure_message_truncates_long_sections_by_default(self) -> None:
+        body = "x" * (FAILURE_SECTION_MAX_CHARS + 500)
+        message = trial_outcomes_failure_message(
+            self._long_body_outcomes(body), TARGET, "demo::check"
+        )
+        assert "... (500 chars truncated)" in message
+        assert body not in message
+
+    def test_failure_message_honors_max_chars_override(self) -> None:
+        body = "x" * (FAILURE_SECTION_MAX_CHARS + 500)
+        message = trial_outcomes_failure_message(
+            self._long_body_outcomes(body),
+            TARGET,
+            "demo::check",
+            max_chars=len(body),
+        )
+        assert body in message
+        assert "chars truncated" not in message
+
+    def test_failure_message_zero_max_chars_disables_truncation(self) -> None:
+        body = "x" * (FAILURE_SECTION_MAX_CHARS + 500)
+        message = trial_outcomes_failure_message(
+            self._long_body_outcomes(body), TARGET, "demo::check", max_chars=0
+        )
+        assert body in message
+        assert "chars truncated" not in message
 
 
 class TestFailingAssertions:

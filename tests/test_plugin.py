@@ -14,7 +14,12 @@ import pytest
 
 from binom_eval import DEFAULT_MAX_TRIALS, DEFAULT_TARGET_RATE, plugin
 from binom_eval.stream_json import EvalRun
-from binom_eval.grading import BATCH_FLOOR, FAIL_THRESHOLD, PASS_THRESHOLD
+from binom_eval.grading import (
+    BATCH_FLOOR,
+    FAIL_THRESHOLD,
+    FAILURE_SECTION_MAX_CHARS,
+    PASS_THRESHOLD,
+)
 from binom_eval.plugin import make_eval_runs_fixture, pytest_addoption
 
 
@@ -39,6 +44,7 @@ class TestPytestAddOption:
         assert "--live-eval-max-trials" in options
         assert "--live-eval-target-rate" in options
         assert "--live-eval-model" in options
+        assert "--live-eval-failure-max-chars" in options
 
     def test_max_trials_defaults_to_constant_and_is_int(self) -> None:
         opt = self._options()["--live-eval-max-trials"]
@@ -49,6 +55,11 @@ class TestPytestAddOption:
         opt = self._options()["--live-eval-target-rate"]
         assert opt["default"] == DEFAULT_TARGET_RATE
         assert opt["type"] is float
+
+    def test_failure_max_chars_defaults_to_constant_and_is_int(self) -> None:
+        opt = self._options()["--live-eval-failure-max-chars"]
+        assert opt["default"] == FAILURE_SECTION_MAX_CHARS
+        assert opt["type"] is int
 
     def test_model_has_no_default_and_is_str(self) -> None:
         # No default: the `backend:` prefix is mandatory, so a live run must
