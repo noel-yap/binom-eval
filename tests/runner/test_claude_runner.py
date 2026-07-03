@@ -20,9 +20,34 @@ from typing import Any
 import pytest
 
 from binom_eval import EvalRun
-from binom_eval.runner import claude_runner
+from binom_eval.runner import TRIAL_RETRY, claude_runner
 from binom_eval.runner import retry as runner_retry
 from binom_eval.runner.claude_runner import ClaudeRunner
+
+# A minimal clean trial stream: one assistant event and a non-error result,
+# so `_run_error` grades the run as completed.
+_OK_STREAM = (
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n'
+    '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
+)
+
+# A trial whose result event reports an execution error (e.g. API 500).
+_ERROR_STREAM = (
+    '{"type":"assistant","message":{"content":[]}}\n'
+    '{"type":"result","subtype":"error_during_execution","is_error":true,'
+    '"result":"API Error: 500"}\n'
+)
+
+
+def _proc(
+    stdout: str = _OK_STREAM, returncode: int = 0, stderr: str = ""
+) -> Any:
+    """A fake completed subprocess with the attributes `run` inspects."""
+    return type(
+        "R",
+        (),
+        {"stdout": stdout, "returncode": returncode, "stderr": stderr},
+    )()
 
 
 class TestClaudeRunnerVersion:
@@ -217,9 +242,24 @@ class TestAnthropicModelsApi:
         assert claude_runner._MODELS_API_RETRY.backoff_delay(1) == 0.5
         assert claude_runner._MODELS_API_RETRY.backoff_delay(10) == 2.0
 
-    def test_retryable_http_codes(self) -> None:
-        assert claude_runner._MODELS_API_RETRY.is_retryable(self._http_error(503))
-        assert not claude_runner._MODELS_API_RETRY.is_retryable(self._http_error(401))
+    def test_transient_http_code_raises_retryable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_urlopen(_req: object, timeout: float) -> object:
+            raise self._http_error(503)
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        with pytest.raises(runner_retry.RetryableError):
+            claude_runner._fetch_anthropic_model_ids_once(object(), 5.0)
+
+    def test_non_transient_http_code_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_urlopen(_req: object, timeout: float) -> object:
+            raise self._http_error(401)
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        assert claude_runner._fetch_anthropic_model_ids_once(object(), 5.0) is None
 
     def test_retries_transient_error_then_succeeds(
         self, monkeypatch: pytest.MonkeyPatch
@@ -307,13 +347,13 @@ class TestClaudeRunnerRun:
     def _stub_subprocess(
         monkeypatch: pytest.MonkeyPatch, captured: dict[str, Any]
     ) -> None:
-        """Capture the `subprocess.run` call and return an empty fake proc."""
+        """Capture the `subprocess.run` call and return a clean fake proc."""
 
         def fake_run(cmd: list[str], **kw: Any) -> Any:
             captured["cmd"] = cmd
             captured["cwd"] = kw.get("cwd")
             captured["env"] = kw.get("env")
-            return type("R", (), {"stdout": ""})()
+            return _proc()
 
         monkeypatch.setattr(subprocess, "run", fake_run)
         monkeypatch.setattr(
@@ -373,3 +413,89 @@ class TestClaudeRunnerRun:
 
         env = captured["env"]
         assert env["HOME"] != "/real/home"
+
+
+class TestClaudeRunnerRunErrored:
+    """Errored trials are retried, then marked rather than graded as fails."""
+
+    @staticmethod
+    def _stub(
+        monkeypatch: pytest.MonkeyPatch, procs: list[Any]
+    ) -> dict[str, int]:
+        """Feed `procs` to successive subprocess calls; count the attempts."""
+        calls = {"n": 0}
+
+        def fake_run(cmd: list[str], **kw: Any) -> Any:
+            proc = procs[min(calls["n"], len(procs) - 1)]
+            calls["n"] += 1
+            if isinstance(proc, BaseException):
+                raise proc
+            return proc
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(runner_retry.time, "sleep", lambda _delay: None)
+        return calls
+
+    def test_nonzero_exit_marks_run_errored_after_retries(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        calls = self._stub(
+            monkeypatch, [_proc(stdout="", returncode=1, stderr="boom")]
+        )
+
+        run = ClaudeRunner().run("do it", tmp_path, "demo", model="haiku")
+
+        assert run.errored is True
+        assert run.skill_invoked is False
+        assert "CLI exited with status 1" in run.error
+        assert "boom" in run.error
+        assert calls["n"] == TRIAL_RETRY.max_attempts
+
+    def test_is_error_result_event_marks_run_errored(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._stub(monkeypatch, [_proc(stdout=_ERROR_STREAM)])
+
+        run = ClaudeRunner().run("do it", tmp_path, "demo", model="haiku")
+
+        assert run.errored is True
+        assert "error_during_execution" in run.error
+        assert "API Error: 500" in run.error
+
+    def test_empty_stream_marks_run_errored(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._stub(monkeypatch, [_proc(stdout="")])
+
+        run = ClaudeRunner().run("do it", tmp_path, "demo", model="haiku")
+
+        assert run.errored is True
+        assert "no assistant events" in run.error
+
+    def test_transient_error_retries_then_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        calls = self._stub(
+            monkeypatch, [_proc(stdout=_ERROR_STREAM), _proc()]
+        )
+
+        run = ClaudeRunner().run("do it", tmp_path, "demo", model="haiku")
+
+        assert run.errored is False
+        assert run.assistant_text == "hi"
+        assert calls["n"] == 2
+
+    def test_timeout_marks_run_errored(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._stub(
+            monkeypatch,
+            [subprocess.TimeoutExpired(cmd="claude", timeout=300)],
+        )
+
+        run = ClaudeRunner().run(
+            "do it", tmp_path, "demo", timeout=1, model="haiku"
+        )
+
+        assert run.errored is True
+        assert "timed out" in run.error

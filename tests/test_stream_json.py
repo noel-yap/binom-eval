@@ -24,6 +24,7 @@ from binom_eval import (
     skill_invoked_in_tools,
     skill_was_invoked,
     agent_or_skill_invoked,
+    stream_error,
     tool_invoked,
 )
 
@@ -352,3 +353,50 @@ class TestToolInvocation:
             run, "dependency-injection", "dependency-injection"
         )
         assert not agent_or_skill_invoked(run, "other", "other-skill")
+
+class TestStreamError:
+    """Detection of errored trials from stream-json output."""
+
+    _ASSISTANT = (
+        '{"type":"assistant","message":{"content":'
+        '[{"type":"text","text":"hi"}]}}'
+    )
+    _OK_RESULT = (
+        '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
+    )
+
+    def test_none_for_clean_stream(self) -> None:
+        assert stream_error(f"{self._ASSISTANT}\n{self._OK_RESULT}\n") is None
+
+    def test_reports_is_error_result_with_subtype_and_message(self) -> None:
+        stdout = (
+            f"{self._ASSISTANT}\n"
+            '{"type":"result","subtype":"error_during_execution",'
+            '"is_error":true,"result":"API Error: 500"}\n'
+        )
+        error = stream_error(stdout)
+        assert error == "error_during_execution: API Error: 500"
+
+    def test_reports_is_error_result_without_message(self) -> None:
+        stdout = (
+            f"{self._ASSISTANT}\n"
+            '{"type":"result","subtype":"error_max_turns","is_error":true}\n'
+        )
+        assert stream_error(stdout) == "error_max_turns"
+
+    def test_reports_stream_with_no_assistant_events(self) -> None:
+        stdout = f"{self._OK_RESULT}\n"
+        error = stream_error(stdout)
+        assert error is not None and "no assistant events" in error
+
+    def test_reports_empty_stdout(self) -> None:
+        error = stream_error("")
+        assert error is not None and "no assistant events" in error
+
+    def test_non_error_result_does_not_mask_missing_assistant_events(
+        self,
+    ) -> None:
+        # A dead CLI can still flush non-assistant events; those alone are
+        # not a gradeable transcript.
+        stdout = '{"type":"system","subtype":"init","model":"m"}\n'
+        assert stream_error(stdout) is not None

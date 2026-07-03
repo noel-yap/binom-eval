@@ -18,6 +18,7 @@ from binom_eval.grading import (
     eval_passed,
     expand_evals,
     failing_assertions,
+    graded_runs,
     load_evals,
     trial_outcomes,
     trial_outcomes_failure_message,
@@ -72,8 +73,11 @@ def _agent_trigger_pass_counts(
     return [
         (
             ev["id"],
-            sum(agent_invoked(r, agent_name) for r in runs[ev["id"]]),
-            len(runs[ev["id"]]),
+            sum(
+                agent_invoked(r, agent_name)
+                for r in graded_runs(runs[ev["id"]])
+            ),
+            len(graded_runs(runs[ev["id"]])),
         )
         for ev in positive
     ]

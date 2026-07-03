@@ -37,6 +37,7 @@ from binom_eval import (
     expand_eval_item,
     expand_evals,
     failing_assertions,
+    graded_runs,
     load_evals,
     next_batch_size,
     posterior_pass_prob,
@@ -56,6 +57,18 @@ def _runs(*passed: bool) -> list[EvalRun]:
         EvalRun(eval_id="t", prompt="", skill_invoked=p, assistant_text="")
         for p in passed
     ]
+
+
+def _errored_run() -> EvalRun:
+    """A trial that never produced a gradeable result (see EvalRun.errored)."""
+    return EvalRun(
+        eval_id="t",
+        prompt="",
+        skill_invoked=False,
+        assistant_text="",
+        errored=True,
+        error="API Error: 500",
+    )
 
 
 def _skill_check(run: EvalRun) -> None:
@@ -167,6 +180,68 @@ class TestTrialOutcomes:
             "structured miss",
             sections=(("Input", "before"), ("Output", "after")),
         )
+
+
+class TestErroredRunExclusion:
+    """Errored trials never count in a posterior, for or against the skill."""
+
+    def test_graded_runs_drops_errored(self) -> None:
+        runs = _runs(True, False) + [_errored_run()]
+        graded = graded_runs(runs)
+        assert len(graded) == 2
+        assert all(not r.errored for r in graded)
+
+    def test_trial_outcomes_skips_errored_with_original_indices(self) -> None:
+        runs = [_runs(True)[0], _errored_run(), _runs(False)[0]]
+        outcomes = trial_outcomes(runs, _skill_check)
+        assert [idx for idx, _ in outcomes] == [0, 2]
+        assert outcomes[0][1] is None
+        assert outcomes[1][1] == TrialFailure("miss")
+
+    def test_errored_trials_do_not_fail_lock_the_verdict(self) -> None:
+        # Three errored trials would previously read as three behavioral
+        # failures and FAIL-lock the eval; now they carry no evidence, so
+        # the verdict is still open and the floor batch fires.
+        runs = [_errored_run(), _errored_run(), _errored_run()]
+        assert next_batch_size(runs, [_skill_check], 21, TARGET) == BATCH_FLOOR
+
+    def test_errored_trials_do_not_count_as_passes(self) -> None:
+        # 4/5 graded passes plus two errored trials must grade exactly like
+        # the 4/5 alone (shortfall 4), not like 6/7 passes.
+        runs = _runs(True, True, True, True, False) + [
+            _errored_run(),
+            _errored_run(),
+        ]
+        assert next_batch_size(runs, [_skill_check], 21, TARGET) == 4
+
+    def test_errored_trials_still_spend_the_budget(self) -> None:
+        # 20 trials done (5 graded, 15 errored): one trial of budget remains.
+        runs = _runs(True, True, True, True, False) + [
+            _errored_run() for _ in range(15)
+        ]
+        assert next_batch_size(runs, [_skill_check], 21, TARGET) == 1
+
+    def test_failing_assertions_counts_only_graded_trials(self) -> None:
+        # 3/3 graded passes clears the bar; the errored trials must not be
+        # read as failures that drag p_good under 0.5.
+        runs = _runs(True, True, True) + [_errored_run(), _errored_run()]
+        handlers = {"skill": _skill_check}
+        assertions = [{"id": "skill"}]
+        assert failing_assertions(runs, assertions, handlers, TARGET) == []
+
+    def test_trigger_pass_counts_excludes_errored(self) -> None:
+        runs = {"a": _runs(True, False, True) + [_errored_run()]}
+        evals = [{"id": "a", "should_trigger": True}]
+        assert trigger_pass_counts(runs, evals) == [("a", 2, 3)]
+
+    def test_failure_message_notes_when_every_trial_errored(self) -> None:
+        outcomes = trial_outcomes(
+            [_errored_run(), _errored_run()], _skill_check
+        )
+        assert outcomes == []
+        message = trial_outcomes_failure_message(outcomes, TARGET, "x")
+        assert "0/0 trials passed" in message
+        assert "every trial errored" in message
 
 
 class TestTrialOutcomesGrading:

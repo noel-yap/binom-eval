@@ -217,6 +217,7 @@ consider_namespace_packages = true
 | `run_eval_adaptive`, `next_batch_size` | The adaptive trial driver. |
 | `posterior_pass_prob`, `eval_passed` | Beta-binomial posterior + final grade. |
 | `trial_outcomes_passed`, `trial_outcomes_failure_message`, `failing_assertions`, `trigger_pass_counts` | Grading rollups for a completed batch. |
+| `graded_runs` | The trials that count toward the posterior — errored trials (`EvalRun.errored`, e.g. an API failure that survived the runner's bounded retries) are excluded rather than graded as failures. |
 | `run_claude`, `run_claude_batch`, `stripped_env` | The `claude -p` I/O layer. |
 | `EvalRun`, `parse_stream_json` | Stream-json parsing into the shared record. |
 | `agent_invoked`, `skill_invoked_in_tools`, `skill_was_invoked`, `agent_or_skill_invoked`, `tool_invoked` | Inspect `EvalRun` for Agent/Skill delegation (bool predicates for use with `assert`). |

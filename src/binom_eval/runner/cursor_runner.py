@@ -40,6 +40,8 @@ from binom_eval.runner import (
     DEFAULT_TIMEOUT_SECONDS,
     Runner,
     _format_model_error,
+    _run_trial,
+    _spawn_checked,
     fake_home_env,
     isolated_workdir,
     stripped_env,
@@ -238,41 +240,46 @@ class CursorRunner(Runner):
         so the CLI bypasses the macOS keychain and never raises the
         blocking `cursor-user` popup. `model` is assumed to be set and is
         always forwarded as `--model`.
+
+        A trial that errors out -- nonzero exit, an `is_error` result event,
+        or a stream with no assistant events -- is retried with bounded
+        back-off (`TRIAL_RETRY`) inside the one `timeout` budget; if retries
+        exhaust, the returned run is marked `errored` so grading excludes it
+        from the Beta-binomial counts instead of scoring the failure against
+        the skill.
         """
-        with (
-            isolated_workdir(repo_root, isolate) as workdir,
-            fake_home_env() as base_env,
-        ):
-            env = cursor_env(base_env)
-            cmd = [
-                "cursor-agent",
-                "--print",
-                "--output-format",
-                "stream-json",
-                "--force",
-                "--trust",
-                "--workspace",
-                str(workdir),
-                "--model",
-                model,
-                prompt,
-            ]
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=str(workdir),
-                env=env,
-                timeout=timeout,
+        def attempt(remaining: float, last_error: list[str]) -> EvalRun:
+            with (
+                isolated_workdir(repo_root, isolate) as workdir,
+                fake_home_env() as base_env,
+            ):
+                env = cursor_env(base_env)
+                cmd = [
+                    "cursor-agent",
+                    "--print",
+                    "--output-format",
+                    "stream-json",
+                    "--force",
+                    "--trust",
+                    "--workspace",
+                    str(workdir),
+                    "--model",
+                    model,
+                    prompt,
+                ]
+                proc = _spawn_checked(
+                    cmd, str(workdir), env, remaining, last_error
+                )
+                skill_invoked, assistant_text, tool_uses, run_model = (
+                    parse_cursor_stream_json(proc.stdout, skill_name, workdir)
+                )
+            return EvalRun(
+                eval_id="",
+                prompt=prompt,
+                skill_invoked=skill_invoked,
+                assistant_text=assistant_text,
+                tool_uses=tool_uses,
+                model=run_model,
             )
-            skill_invoked, assistant_text, tool_uses, model = (
-                parse_cursor_stream_json(proc.stdout, skill_name, workdir)
-            )
-        return EvalRun(
-            eval_id="",
-            prompt=prompt,
-            skill_invoked=skill_invoked,
-            assistant_text=assistant_text,
-            tool_uses=tool_uses,
-            model=model,
-        )
+
+        return _run_trial(prompt, timeout, attempt)

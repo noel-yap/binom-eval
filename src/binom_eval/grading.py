@@ -219,6 +219,19 @@ def eval_passed(passes: int, trials: int, target: float) -> bool:
     return posterior_pass_prob(passes, trials, target) >= 0.5
 
 
+def graded_runs(runs: list[EvalRun]) -> list[EvalRun]:
+    """The trials that count toward the Beta-binomial posterior.
+
+    Errored trials (CLI died, API error, retries exhausted -- see
+    `EvalRun.errored`) are excluded everywhere a pass/fail count is taken:
+    an infrastructure failure carries no evidence about the skill's true
+    pass rate, so grading it as a behavioral failure would bias the
+    posterior downward with noise. Errored trials still count against the
+    `MAX_TRIALS` budget (their cost was spent).
+    """
+    return [run for run in runs if not run.errored]
+
+
 def _trigger_check(run: EvalRun) -> None:
     """Assertion-style check that the skill fired (for should_trigger evals)."""
     if not run.skill_invoked:
@@ -310,15 +323,17 @@ def next_batch_size(
         unlucky-streak verdicts) and capped by the remaining budget.
 
     `run_eval_adaptive` re-grades after each batch, so the next one shrinks
-    as the posteriors converge.
+    as the posteriors converge. Errored trials count against the budget
+    (their cost was spent) but not toward any posterior -- see `graded_runs`.
     """
-    trials_done = len(runs)
-    remaining = max_trials - trials_done
+    remaining = max_trials - len(runs)
     if remaining <= 0:
         return 0
+    graded = graded_runs(runs)
+    trials_done = len(graded)
     shortfalls: list[int] = []
     for check in checks:
-        passes = trials_done - _check_failures(runs, check)
+        passes = trials_done - _check_failures(graded, check)
         verdict = _verdict(passes, trials_done, target)
         if verdict is Verdict.FAIL:
             return 0  # eval already fails; no batch can change that.
@@ -479,14 +494,18 @@ def _format_trial_failure(idx: int, failure: TrialFailure) -> str:
 def trial_outcomes(
     runs: list[EvalRun], check: Callable[[EvalRun], None]
 ) -> list[tuple[int, TrialFailure | None]]:
-    """Run `check` against each trial run, capturing its assertion result.
+    """Run `check` against each gradeable trial run, capturing its result.
 
     `check` is an assertion handler that raises ``AssertionFailure`` on
-    failure. Returns one ``(trial_index, failure_or_None)`` per run, where
-    ``None`` means that trial passed.
+    failure. Returns one ``(trial_index, failure_or_None)`` per graded run,
+    where ``None`` means that trial passed. Errored trials are skipped (see
+    `graded_runs`); indices still refer to positions in ``runs`` so a trial
+    can be cross-referenced against the full batch.
     """
     outcomes: list[tuple[int, TrialFailure | None]] = []
     for idx, run in enumerate(runs):
+        if run.errored:
+            continue
         try:
             check(run)
             outcomes.append((idx, None))
@@ -521,6 +540,8 @@ def trial_outcomes_failure_message(
         for idx, err in outcomes
         if err is not None
     )
+    if not trials:
+        detail = "  (no gradeable trials: every trial errored)"
     return (
         f"{label}: {passes}/{trials} trials passed; "
         f"P(rate >= {target:.3f}) = {p_good:.3f} "
@@ -547,12 +568,12 @@ def failing_assertions(
     a `KeyError` rather than a silent skip.
     """
     failing: list[tuple[str, int, int, float]] = []
+    trials = len(graded_runs(runs))
     for assertion in assertions:
         handler = handlers[assertion["id"]]
         passes = sum(
             1 for _, err in trial_outcomes(runs, handler) if err is None
         )
-        trials = len(runs)
         if not eval_passed(passes, trials, target):
             p_good = posterior_pass_prob(passes, trials, target)
             failing.append((assertion["id"], passes, trials, p_good))
@@ -562,12 +583,15 @@ def failing_assertions(
 def trigger_pass_counts(
     runs: dict[str, list[EvalRun]], evals: list[dict[str, Any]]
 ) -> list[tuple[str, int, int]]:
-    """Per should_trigger eval: (id, trials_invoking_skill, trials_total)."""
+    """Per should_trigger eval: (id, trials_invoking_skill, trials_total).
+
+    Counts only graded trials; errored ones carry no trigger evidence.
+    """
     return [
         (
             ev["id"],
-            sum(r.skill_invoked for r in runs[ev["id"]]),
-            len(runs[ev["id"]]),
+            sum(r.skill_invoked for r in graded_runs(runs[ev["id"]])),
+            len(graded_runs(runs[ev["id"]])),
         )
         for ev in evals
         if ev.get("should_trigger")
