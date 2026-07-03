@@ -36,14 +36,28 @@ import subprocess
 import tempfile
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from binom_eval.stream_json import EvalRun, parse_stream_json
+from binom_eval.runner.retry import RetryableError, RetryPolicy
+from binom_eval.stream_json import EvalRun, parse_stream_json, stream_error
 
 DEFAULT_TIMEOUT_SECONDS = 300
+
+# Back-off for one live trial. An API 500/overload or a CLI that dies
+# mid-run surfaces as a nonzero exit or an `is_error` result event; grading
+# such a trial as a behavioral failure would bias every posterior downward
+# with noise unrelated to the skill, so backends retry the trial a few times
+# (within the trial's own timeout budget) before marking the run errored.
+# `_spawn_checked` raises every transient trial failure as `RetryableError`,
+# which is exactly what `RetryPolicy` retries.
+TRIAL_RETRY = RetryPolicy(
+    max_attempts=3,
+    base_delay_seconds=1.0,
+    max_delay_seconds=8.0,
+)
 
 # Regenerable or heavy directories not copied into a per-run isolated
 # workdir: caches are rebuilt on demand and dependency trees would dominate
@@ -129,6 +143,93 @@ def _model_probe_rejected(stdout: str) -> str | None:
                 rejected = True
             message = event.get("result") or message
     return (message or "model not found") if rejected else None
+
+
+def _run_error(
+    returncode: int | None, stdout: str, stderr: str = ""
+) -> str | None:
+    """Why one completed CLI trial should not be graded, or None when clean.
+
+    A nonzero exit means the CLI itself failed (the reason usually lands on
+    stderr); a clean exit can still carry an errored stream (`is_error`
+    result event, or no assistant events at all) -- see `stream_error`.
+    """
+    if returncode:
+        lines = (stderr or stdout).strip().splitlines()
+        tail = lines[-1] if lines else ""
+        message = f"CLI exited with status {returncode}"
+        return f"{message}: {tail}" if tail else message
+    return stream_error(stdout)
+
+
+def _errored_run(prompt: str, error: str) -> EvalRun:
+    """An `EvalRun` marking a trial that produced no gradeable result."""
+    return EvalRun(
+        eval_id="",
+        prompt=prompt,
+        skill_invoked=False,
+        assistant_text="",
+        tool_uses=[],
+        model="",
+        errored=True,
+        error=error,
+    )
+
+
+def _spawn_checked(
+    cmd: list[str],
+    cwd: str,
+    env: dict[str, str],
+    remaining: float,
+    last_error: list[str],
+) -> subprocess.CompletedProcess[str]:
+    """Run one CLI trial attempt; raise `RetryableError` on any error signal.
+
+    Converts the error outcomes -- `subprocess.TimeoutExpired`, nonzero exit,
+    or an errored stream (see `_run_error`) -- into `RetryableError` so the
+    `TRIAL_RETRY` loop in `_run_trial` retries them, recording the reason in
+    `last_error` for the eventual errored run.
+    """
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            env=env,
+            timeout=remaining,
+        )
+    except subprocess.TimeoutExpired:
+        last_error[0] = f"trial timed out after {remaining:.0f}s"
+        raise RetryableError(last_error[0]) from None
+    error = _run_error(proc.returncode, proc.stdout, proc.stderr)
+    if error is not None:
+        last_error[0] = error
+        raise RetryableError(error)
+    return proc
+
+
+def _run_trial(
+    prompt: str,
+    timeout: int,
+    attempt: Callable[[float, list[str]], EvalRun],
+) -> EvalRun:
+    """Drive one trial's attempts through `TRIAL_RETRY`.
+
+    `attempt(remaining_seconds, last_error)` performs a single live call
+    (typically via `_spawn_checked`, which records its failure reason in
+    `last_error` before raising `RetryableError`). Returns the first
+    successful attempt's run, or an errored `EvalRun` carrying the last
+    failure reason once retries or the `timeout` budget are exhausted.
+    """
+    last_error = ["trial produced no result"]
+    result = TRIAL_RETRY.execute(
+        lambda remaining: attempt(remaining, last_error),
+        timeout,
+    )
+    if result is None:
+        return _errored_run(prompt, last_error[0])
+    return result
 
 
 def _format_model_error(
@@ -349,6 +450,7 @@ __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
     "ISOLATION_IGNORE",
     "NESTED_SESSION_MARKERS",
+    "TRIAL_RETRY",
     "ClaudeRunner",
     "CursorRunner",
     "Runner",

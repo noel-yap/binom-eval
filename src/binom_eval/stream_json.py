@@ -26,6 +26,13 @@ class EvalRun:
     tool_uses: list[dict[str, Any]] = field(default_factory=list)
     model: str = ""
     prompt_input: str = ""
+    # A trial that could not produce a gradeable transcript (CLI died, API
+    # error surfaced as an `is_error` result, retries exhausted). Errored
+    # trials are excluded from the Beta-binomial counts -- an infrastructure
+    # failure says nothing about the skill's true pass rate -- rather than
+    # graded as behavioral failures. `error` carries the last failure reason.
+    errored: bool = False
+    error: str = ""
 
 
 def _try_parse_json(line: str) -> dict[str, Any] | None:
@@ -125,6 +132,27 @@ def _model_from_events(events: list[dict[str, Any]]) -> str:
             if model:
                 return str(model)
     return ""
+
+
+def stream_error(stdout: str) -> str | None:
+    """Why a run's stream-json output signals an errored trial, or None.
+
+    A trial is errored -- as opposed to a behavioral failure -- when the
+    stream carries a `result` event with `is_error: true` (API errors such as
+    500/overload surface this way, with subtypes like `error_during_execution`
+    or `error_max_turns`), or when it contains no assistant events at all
+    (the CLI died before the model produced anything). Kept pure so the
+    detection is unit-testable without spawning a CLI.
+    """
+    events = list(filter(None, map(_try_parse_json, stdout.splitlines())))
+    for ev in events:
+        if ev.get("type") == "result" and ev.get("is_error"):
+            subtype = str(ev.get("subtype") or "error")
+            message = str(ev.get("result") or "").strip()
+            return f"{subtype}: {message}" if message else subtype
+    if not any(map(_is_assistant_event, events)):
+        return "no assistant events in stream-json output"
+    return None
 
 
 def parse_stream_json(

@@ -40,7 +40,7 @@ once per backend to grade on both.
 | `grading.py` | Beta-binomial math (`posterior_pass_prob`, `eval_passed`), adaptive trial driver (`run_eval_adaptive`, `next_batch_size`), grading rollups |
 | `plugin.py` | pytest integration: `--live-eval-*` CLI options, `live_eval` marker, `make_eval_runs_fixture` |
 | `suite.py` | Thin consumer wiring: `bind_eval_runs_fixture` (for `conftest.py`) and `register_live_eval_tests` (for `test_evals.py`) |
-| `runner/` | subprocess layer: the `Runner` backends (`ClaudeRunner`, `CursorRunner`) selected by `resolve_runner` from a `backend:model` spec, the throttled `run_claude_batch` (shared `threading.Semaphore`), per-backend `preflight`/`validate_model`, and `isolated_workdir`; `retry.py` holds `HttpRetryPolicy` (deadline-aware back-off loop reused by backends) |
+| `runner/` | subprocess layer: the `Runner` backends (`ClaudeRunner`, `CursorRunner`) selected by `resolve_runner` from a `backend:model` spec, the throttled `run_claude_batch` (shared `threading.Semaphore`), per-backend `preflight`/`validate_model`, and `isolated_workdir`; `retry.py` holds `RetryPolicy`/`RetryableError` (deadline-aware back-off loop used for the Models API lookup and, via `TRIAL_RETRY`, for transient trial failures — a trial that still errors after retries is returned with `EvalRun.errored=True`) |
 | `stream_json.py` | `EvalRun` dataclass, `parse_stream_json` (parses `claude -p` stdout), skill/agent invocation predicates |
 | `text_utils.py` | Pure text/regex helpers for assertion modules |
 
@@ -51,6 +51,7 @@ once per backend to grade on both.
 - PASS once `p_good > PASS_THRESHOLD` (≈0.865), FAIL once `p_good < FAIL_THRESHOLD` (≈0.135).
 - Adaptive: `next_batch_size` computes the optimistic shortfall per undetermined check, floors at `BATCH_FLOOR=3`, caps at remaining budget.
 - Budget tiebreak at `p_good >= 0.5` if `MAX_TRIALS` exhausted inside the band.
+- Errored trials (`EvalRun.errored`: CLI died, `is_error` result event, retries exhausted — see `TRIAL_RETRY` in `runner/`) are excluded from every posterior count via `graded_runs`, but still spend the trial budget.
 
 ### Consumer pattern (see `examples/`)
 

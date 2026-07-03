@@ -56,6 +56,7 @@ from binom_eval.grading import (
     expand_eval_item,
     expand_evals,
     failing_assertions,
+    graded_runs,
     load_evals,
     next_batch_size,
     posterior_pass_prob,
@@ -107,6 +108,7 @@ from binom_eval.stream_json import (
     skill_invoked_in_tools,
     skill_was_invoked,
     agent_or_skill_invoked,
+    stream_error,
     tool_invoked,
 )
 from binom_eval.text_utils import (
@@ -139,6 +141,7 @@ __all__ = [
     "parse_stream_json",
     "skill_invoked_in_tools",
     "skill_was_invoked",
+    "stream_error",
     "tool_invoked",
     # runner
     "BACKENDS",
@@ -168,6 +171,7 @@ __all__ = [
     "expand_eval_item",
     "expand_evals",
     "failing_assertions",
+    "graded_runs",
     "load_evals",
     "next_batch_size",
     "posterior_pass_prob",

@@ -23,11 +23,13 @@ from binom_eval.runner import (
     Runner,
     _format_model_error,
     _model_probe_rejected,
+    _run_trial,
+    _spawn_checked,
     fake_home_env,
     isolated_workdir,
     stripped_env,
 )
-from binom_eval.runner.retry import HttpRetryPolicy
+from binom_eval.runner.retry import RetryableError, RetryPolicy
 from binom_eval.stream_json import EvalRun, parse_stream_json
 
 # Live evals run under a throwaway HOME so the invoking user's skill roots never
@@ -38,11 +40,15 @@ CLAUDE_SETTING_SOURCES = "project"
 # CLI aliases accepted by `claude --model` that are not returned as API model IDs.
 CLAUDE_MODEL_ALIASES = frozenset({"fable", "haiku", "opus", "sonnet"})
 
-_MODELS_API_RETRY = HttpRetryPolicy(
+# HTTP statuses worth retrying: rate-limit (429) and transient upstream/server
+# errors. Any other status (e.g. 401/403 auth, 404) is permanent for the
+# request, so the lookup gives up and reports the model list as unavailable.
+_RETRYABLE_MODELS_API_HTTP = frozenset({429, 500, 502, 503, 504})
+
+_MODELS_API_RETRY = RetryPolicy(
     max_attempts=3,
     base_delay_seconds=0.25,
     max_delay_seconds=2.0,
-    retryable_http=frozenset({429, 500, 502, 503, 504}),
 )
 
 
@@ -65,11 +71,26 @@ def _parse_anthropic_models_payload(payload: object) -> list[str]:
 
 def _fetch_anthropic_model_ids_once(
     req: urllib.request.Request, timeout: float
-) -> list[str]:
-    """One Models API request; raises on transport or payload errors."""
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        payload = json.loads(resp.read().decode())
-    return _parse_anthropic_models_payload(payload)
+) -> list[str] | None:
+    """One Models API request, classified for `_MODELS_API_RETRY`.
+
+    Raises `RetryableError` on a transient failure -- a timeout, a connection
+    error, or a retryable HTTP status -- so the request is retried. Returns
+    `None` for any permanent failure (auth error, missing or malformed
+    payload) to signal that the model list is unavailable.
+    """
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode())
+        return _parse_anthropic_models_payload(payload)
+    except urllib.error.HTTPError as exc:
+        if exc.code in _RETRYABLE_MODELS_API_HTTP:
+            raise RetryableError(f"models API returned HTTP {exc.code}") from exc
+        return None
+    except (TimeoutError, urllib.error.URLError) as exc:
+        raise RetryableError("models API request failed") from exc
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
 
 
 def _anthropic_model_ids(timeout: int = 30) -> list[str] | None:
@@ -87,8 +108,6 @@ def _anthropic_model_ids(timeout: int = 30) -> list[str] | None:
     return _MODELS_API_RETRY.execute(
         lambda remaining: _fetch_anthropic_model_ids_once(req, remaining),
         timeout,
-        transport_errors=(TimeoutError, urllib.error.URLError),
-        fatal_errors=(json.JSONDecodeError, KeyError, TypeError, ValueError),
     )
 
 
@@ -197,6 +216,13 @@ class ClaudeRunner(Runner):
         project` -- so no user-level config or skill root leaks in; project
         skills from the workspace still load. The run authenticates from
         `ANTHROPIC_API_KEY`, preserved in that scrubbed env.
+
+        A trial that errors out -- nonzero exit, an `is_error` result event
+        (API 500/overload, `error_during_execution`, ...), or a stream with
+        no assistant events -- is retried with bounded back-off (`TRIAL_RETRY`)
+        inside the one `timeout` budget; if retries exhaust, the returned run
+        is marked `errored` so grading excludes it from the Beta-binomial
+        counts instead of scoring the failure against the skill.
         """
         cmd = [
             "claude",
@@ -213,23 +239,24 @@ class ClaudeRunner(Runner):
             "--model",
             model,
         ]
-        with isolated_workdir(repo_root, isolate) as workdir, fake_home_env() as env:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=str(workdir),
-                env=env,
-                timeout=timeout,
+        def attempt(remaining: float, last_error: list[str]) -> EvalRun:
+            with (
+                isolated_workdir(repo_root, isolate) as workdir,
+                fake_home_env() as env,
+            ):
+                proc = _spawn_checked(
+                    cmd, str(workdir), env, remaining, last_error
+                )
+                skill_invoked, assistant_text, tool_uses, run_model = (
+                    parse_stream_json(proc.stdout, skill_name, workdir)
+                )
+            return EvalRun(
+                eval_id="",
+                prompt=prompt,
+                skill_invoked=skill_invoked,
+                assistant_text=assistant_text,
+                tool_uses=tool_uses,
+                model=run_model,
             )
-        skill_invoked, assistant_text, tool_uses, model = parse_stream_json(
-            proc.stdout, skill_name, workdir
-        )
-        return EvalRun(
-            eval_id="",
-            prompt=prompt,
-            skill_invoked=skill_invoked,
-            assistant_text=assistant_text,
-            tool_uses=tool_uses,
-            model=model,
-        )
+
+        return _run_trial(prompt, timeout, attempt)

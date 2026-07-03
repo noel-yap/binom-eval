@@ -18,7 +18,8 @@ from typing import Any
 import pytest
 
 from binom_eval import EvalRun
-from binom_eval.runner import cursor_runner
+from binom_eval.runner import TRIAL_RETRY, cursor_runner
+from binom_eval.runner import retry as runner_retry
 from binom_eval.runner.cursor_runner import (
     CursorRunner,
     _cursor_tool_use,
@@ -27,6 +28,20 @@ from binom_eval.runner.cursor_runner import (
     parse_cursor_stream_json,
 )
 from binom_eval.stream_json import _skill_read_hit
+
+# A minimal clean trial stream (one assistant event, non-error result), so
+# `_run_error` grades the fake run as completed.
+_OK_STREAM = (
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n'
+    '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
+)
+
+
+def _ok_proc() -> Any:
+    """A fake completed subprocess with the attributes `run` inspects."""
+    return type(
+        "R", (), {"stdout": _OK_STREAM, "returncode": 0, "stderr": ""}
+    )()
 
 
 class TestIsStartedToolCall:
@@ -402,7 +417,7 @@ class TestCursorRunnerRun:
             captured["cmd"] = cmd
             captured["cwd"] = kw.get("cwd")
             captured["env"] = kw.get("env")
-            return type("R", (), {"stdout": ""})()
+            return _ok_proc()
 
         monkeypatch.setattr(subprocess, "run", fake_run)
         monkeypatch.setattr(
@@ -513,7 +528,7 @@ class TestCursorRunnerSkipsKeychain:
     ) -> None:
         def fake_run(cmd: list[str], **kw: Any) -> Any:
             captured["env"] = kw.get("env")
-            return type("R", (), {"stdout": ""})()
+            return _ok_proc()
 
         monkeypatch.setattr(subprocess, "run", fake_run)
 
@@ -555,3 +570,33 @@ class TestCursorRunnerSkipsKeychain:
 
         assert captured["env"]["AGENT_CLI_CREDENTIAL_STORE"] == "memory"
         assert captured["env"]["CI"] == "true"
+
+
+class TestCursorRunnerRunErrored:
+    """Errored trials are retried, then marked rather than graded as fails.
+
+    The shared detection/retry logic is exercised in depth in
+    `test_claude_runner.py`; this pins that `CursorRunner.run` is wired
+    through the same path.
+    """
+
+    def test_nonzero_exit_marks_run_errored_after_retries(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        calls = {"n": 0}
+
+        def fake_run(cmd: list[str], **kw: Any) -> Any:
+            calls["n"] += 1
+            return type(
+                "R", (), {"stdout": "", "returncode": 2, "stderr": "died"}
+            )()
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(runner_retry.time, "sleep", lambda _delay: None)
+
+        run = CursorRunner().run("do it", tmp_path, "demo", model="gpt-5")
+
+        assert run.errored is True
+        assert "CLI exited with status 2" in run.error
+        assert "died" in run.error
+        assert calls["n"] == TRIAL_RETRY.max_attempts
