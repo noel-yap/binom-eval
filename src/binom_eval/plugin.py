@@ -118,10 +118,22 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type=float,
         default=DEFAULT_TARGET_RATE,
         help=(
-            "Target true pass rate a good skill should clear. The verdict "
-            "PASSes once the posterior puts > %.3f of its mass at or above "
-            "this rate, FAILs once < %.3f. Default %.4f."
-            % (PASS_THRESHOLD, 1.0 - PASS_THRESHOLD, DEFAULT_TARGET_RATE)
+            "Target true pass rate a good skill should clear "
+            f"(default {DEFAULT_TARGET_RATE:.4f}). The verdict asks how much "
+            "posterior mass sits at or above this rate; final grading still "
+            "uses the p_good >= 0.5 tiebreak once the trial budget is spent."
+        ),
+    )
+    parser.addoption(
+        "--live-eval-pass-threshold",
+        action="store",
+        type=float,
+        default=PASS_THRESHOLD,
+        help=(
+            "High edge of the verdict band: PASS once p_good exceeds this, "
+            "FAIL once p_good drops below its complement (1 minus this). "
+            f"Default {PASS_THRESHOLD:.4f} (1 - e^-2); the low edge follows "
+            "automatically so the band stays symmetric about 1/2."
         ),
     )
     parser.addoption(
@@ -240,6 +252,13 @@ def make_eval_runs_fixture(
             pytest.fail(preflight_error, pytrace=False)
         max_trials = pytestconfig.getoption("--live-eval-max-trials")
         target = pytestconfig.getoption("--live-eval-target-rate")
+        pass_threshold = pytestconfig.getoption("--live-eval-pass-threshold")
+        if not 0.5 < pass_threshold < 1.0:
+            pytest.fail(
+                "--live-eval-pass-threshold must be strictly between 0.5 "
+                f"and 1.0, got {pass_threshold}",
+                pytrace=False,
+            )
         concurrency = pytestconfig.getoption("--live-eval-concurrency")
         isolate = pytestconfig.getoption("--live-eval-isolate")
         model_error = runner.validate_model(model)
@@ -260,6 +279,7 @@ def make_eval_runs_fixture(
                 max_trials,
                 target,
                 checks,
+                pass_threshold=pass_threshold,
                 gate=gate,
                 isolate=isolate,
                 model=model,
@@ -294,6 +314,12 @@ def make_eval_runs_fixture(
 def live_eval_target_rate(pytestconfig: pytest.Config) -> float:
     """The target true pass rate the verdict grades each check against."""
     return pytestconfig.getoption("--live-eval-target-rate")
+
+
+@pytest.fixture(scope="session")
+def live_eval_pass_threshold(pytestconfig: pytest.Config) -> float:
+    """High edge of the symmetric verdict band used during adaptive trials."""
+    return pytestconfig.getoption("--live-eval-pass-threshold")
 
 
 @pytest.fixture(scope="session")

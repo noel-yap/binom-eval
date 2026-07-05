@@ -193,17 +193,24 @@ def posterior_pass_prob(passes: int, trials: int, target: float) -> float:
     return 1.0 - _betainc(target, alpha, beta)
 
 
-def _verdict(passes: int, trials: int, target: float) -> Verdict:
+def _verdict(
+    passes: int,
+    trials: int,
+    target: float,
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
+) -> Verdict:
     """Band verdict for one check.
 
-    PASS once the posterior mass above ``target`` clears `PASS_THRESHOLD`,
-    FAIL once it drops below `FAIL_THRESHOLD`, otherwise UNDETERMINED -- the
-    state in which `next_batch_size` keeps running trials.
+    PASS once the posterior mass above ``target`` clears ``pass_threshold``,
+    FAIL once it drops below ``1 - pass_threshold``, otherwise UNDETERMINED --
+    the state in which `next_batch_size` keeps running trials.
     """
+    fail_threshold = 1.0 - pass_threshold
     p_good = posterior_pass_prob(passes, trials, target)
-    if p_good > PASS_THRESHOLD:
+    if p_good > pass_threshold:
         return Verdict.PASS
-    if p_good < FAIL_THRESHOLD:
+    if p_good < fail_threshold:
         return Verdict.FAIL
     return Verdict.UNDETERMINED
 
@@ -306,23 +313,29 @@ def _check_failures(
 
 
 def _resolve_shortfall(
-    passes: int, trials: int, target: float, remaining: int
+    passes: int,
+    trials: int,
+    target: float,
+    remaining: int,
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
 ) -> int:
     """Optimistic trials to resolve one undetermined check, capped by budget.
 
     Looks at the two clean continuations from the current ``(passes,
     trials)`` posterior -- an all-pass streak that would push `p_good` above
-    `PASS_THRESHOLD`, and an all-fail streak that would push it below
-    `FAIL_THRESHOLD` -- and returns the shorter. That is the fewest trials
-    that *could* settle the check either way. If neither resolves within
+    ``pass_threshold``, and an all-fail streak that would push it below
+    ``1 - pass_threshold`` -- and returns the shorter. That is the fewest
+    trials that *could* settle the check either way. If neither resolves within
     `remaining`, both fall back to `remaining`, so the result is `remaining`.
     """
+    fail_threshold = 1.0 - pass_threshold
     to_pass = next(
         (
             i
             for i in range(1, remaining + 1)
             if posterior_pass_prob(passes + i, trials + i, target)
-            > PASS_THRESHOLD
+            > pass_threshold
         ),
         remaining,
     )
@@ -331,7 +344,7 @@ def _resolve_shortfall(
             i
             for i in range(1, remaining + 1)
             if posterior_pass_prob(passes, trials + i, target)
-            < FAIL_THRESHOLD
+            < fail_threshold
         ),
         remaining,
     )
@@ -343,6 +356,8 @@ def next_batch_size(
     checks: list[Callable[[EvalRun], None]],
     max_trials: int,
     target: float,
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
 ) -> int:
     """How many trials to run next, or 0 once the verdict is fixed.
 
@@ -371,12 +386,20 @@ def next_batch_size(
     shortfalls: list[int] = []
     for check in checks:
         passes = trials_done - _check_failures(graded, check)
-        verdict = _verdict(passes, trials_done, target)
+        verdict = _verdict(
+            passes, trials_done, target, pass_threshold=pass_threshold
+        )
         if verdict is Verdict.FAIL:
             return 0  # eval already fails; no batch can change that.
         if verdict is Verdict.UNDETERMINED:
             shortfalls.append(
-                _resolve_shortfall(passes, trials_done, target, remaining)
+                _resolve_shortfall(
+                    passes,
+                    trials_done,
+                    target,
+                    remaining,
+                    pass_threshold=pass_threshold,
+                )
             )
     if not shortfalls:  # every check locked PASS (or there are no checks).
         return 0
@@ -391,6 +414,7 @@ def run_eval_adaptive(
     target: float,
     checks: list[Callable[[EvalRun], None]],
     *,
+    pass_threshold: float = PASS_THRESHOLD,
     gate: threading.Semaphore | None = None,
     isolate: bool = False,
     model: str,
@@ -415,7 +439,9 @@ def run_eval_adaptive(
     a round plus evals overlapping above this layer.
     """
     runs: list[EvalRun] = []
-    batch = next_batch_size(runs, checks, max_trials, target)
+    batch = next_batch_size(
+        runs, checks, max_trials, target, pass_threshold=pass_threshold
+    )
     while batch > 0:
         runs.extend(
             run_claude_batch(
@@ -429,7 +455,9 @@ def run_eval_adaptive(
                 runner=runner,
             )
         )
-        batch = next_batch_size(runs, checks, max_trials, target)
+        batch = next_batch_size(
+            runs, checks, max_trials, target, pass_threshold=pass_threshold
+        )
     return runs
 
 

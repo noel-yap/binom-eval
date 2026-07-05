@@ -102,10 +102,13 @@ broken skill correctly failed.
   posterior. This only matters for at-the-bar skills (everything else locks via
   the band first); 0.5 is the principled midpoint.
 
-`TARGET_RATE` and `MAX_TRIALS` are per-run overridable from the CLI
-(`--live-eval-target-rate`, `--live-eval-max-trials`); the band, floor, prior,
-and tiebreak are module constants in `binom_eval.grading` — change them there
-if the workload assumptions shift.
+`TARGET_RATE`, `MAX_TRIALS`, and the band's pass edge are per-run
+overridable from the CLI (`--live-eval-target-rate`,
+`--live-eval-max-trials`, `--live-eval-pass-threshold` — the FAIL edge
+follows as its complement, keeping the band symmetric about 1/2; values
+must sit strictly between 0.5 and 1.0); the floor, prior, and tiebreak
+are module constants in `binom_eval.grading` — change them there if the
+workload assumptions shift.
 
 ## Install
 
@@ -118,8 +121,9 @@ uv add "binom-eval @ git+https://github.com/noel-yap/binom-eval"
 ```
 
 Installing registers a pytest plugin, so the `--live-eval-max-trials`,
-`--live-eval-target-rate`, `--live-eval-concurrency`, `--live-eval-isolate`,
-`--live-eval-model`, and `--live-eval-failure-max-chars` options and the
+`--live-eval-target-rate`, `--live-eval-pass-threshold`,
+`--live-eval-concurrency`, `--live-eval-isolate`, `--live-eval-model`,
+and `--live-eval-failure-max-chars` options and the
 `live_eval` marker become available to your test suite with no extra wiring. Live evals require the `claude` CLI on
 `PATH`; when it's absent the fixture skips rather than fails.
 
@@ -174,6 +178,9 @@ pytest path/to/evals -m live_eval
 # demand a higher true rate over a smaller budget:
 pytest path/to/evals -m live_eval \
     --live-eval-target-rate 0.8 --live-eval-max-trials 12
+# demand more posterior confidence before a verdict locks:
+pytest path/to/evals -m live_eval \
+    --live-eval-pass-threshold 0.95
 # run more trials at once; isolate runs for a skill that writes to the tree:
 pytest path/to/evals -m live_eval \
     --live-eval-concurrency 8 --live-eval-isolate

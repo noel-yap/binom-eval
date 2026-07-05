@@ -135,6 +135,14 @@ class TestVerdict:
         assert _verdict(0, 2, TARGET) == Verdict.FAIL
         assert posterior_pass_prob(0, 2, TARGET) < FAIL_THRESHOLD
 
+    def test_custom_pass_threshold_tightens_the_band(self) -> None:
+        # At default threshold 6/6 is PASS; a tighter band keeps it open.
+        tight = 0.99
+        assert (
+            _verdict(6, 6, TARGET, pass_threshold=tight)
+            == Verdict.UNDETERMINED
+        )
+
 
 class TestEvalPassed:
     """The final grade: posterior majority above the bar."""

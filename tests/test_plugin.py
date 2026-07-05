@@ -43,6 +43,7 @@ class TestPytestAddOption:
         options = self._options()
         assert "--live-eval-max-trials" in options
         assert "--live-eval-target-rate" in options
+        assert "--live-eval-pass-threshold" in options
         assert "--live-eval-model" in options
         assert "--live-eval-failure-max-chars" in options
 
@@ -54,6 +55,11 @@ class TestPytestAddOption:
     def test_target_rate_defaults_to_constant_and_is_float(self) -> None:
         opt = self._options()["--live-eval-target-rate"]
         assert opt["default"] == DEFAULT_TARGET_RATE
+        assert opt["type"] is float
+
+    def test_pass_threshold_defaults_to_constant_and_is_float(self) -> None:
+        opt = self._options()["--live-eval-pass-threshold"]
+        assert opt["default"] == PASS_THRESHOLD
         assert opt["type"] is float
 
     def test_failure_max_chars_defaults_to_constant_and_is_int(self) -> None:
@@ -99,10 +105,12 @@ class _StubConfig:
         concurrency: int = 4,
         isolate: bool = False,
         model: str | None = "claude:haiku",
+        pass_threshold: float = PASS_THRESHOLD,
     ) -> None:
         self._options = {
             "--live-eval-max-trials": max_trials,
             "--live-eval-target-rate": target,
+            "--live-eval-pass-threshold": pass_threshold,
             "--live-eval-concurrency": concurrency,
             "--live-eval-isolate": isolate,
             "--live-eval-model": model,
@@ -189,6 +197,36 @@ class TestMakeEvalRunsFixture:
         with pytest.raises(pytest.fail.Exception, match="is unusable"):
             self._fixture_fn()(_StubConfig(21, 2.0 / 3.0, model="claude:bad"))
 
+    def test_fails_when_pass_threshold_not_above_half(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            plugin,
+            "resolve_runner",
+            lambda _spec: ("claude", "m", _FakeRunner()),
+        )
+        with pytest.raises(
+            pytest.fail.Exception, match="strictly between 0.5"
+        ):
+            self._fixture_fn()(
+                _StubConfig(21, 2.0 / 3.0, pass_threshold=0.5)
+            )
+
+    def test_fails_when_pass_threshold_reaches_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            plugin,
+            "resolve_runner",
+            lambda _spec: ("claude", "m", _FakeRunner()),
+        )
+        with pytest.raises(
+            pytest.fail.Exception, match="strictly between 0.5"
+        ):
+            self._fixture_fn()(
+                _StubConfig(21, 2.0 / 3.0, pass_threshold=1.0)
+            )
+
     def test_builds_runs_keyed_by_eval_id_when_cli_present(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -203,7 +241,7 @@ class TestMakeEvalRunsFixture:
                 {"id": "e2", "assertions": []},
             ],
         )
-        calls: list[tuple[str, int, float]] = []
+        calls: list[tuple[str, int, float, float]] = []
 
         def fake_adaptive(
             item: dict[str, Any],
@@ -213,12 +251,13 @@ class TestMakeEvalRunsFixture:
             target: float,
             checks: list[Any],
             *,
+            pass_threshold: float = PASS_THRESHOLD,
             gate: Any = None,
             isolate: bool = False,
             model: str,
             runner: Any = None,
         ) -> list[EvalRun]:
-            calls.append((item["id"], max_trials, target))
+            calls.append((item["id"], max_trials, target, pass_threshold))
             return [
                 EvalRun(
                     eval_id=item["id"],
@@ -240,5 +279,51 @@ class TestMakeEvalRunsFixture:
         # Evals are driven through a thread pool so recorded order is not
         # guaranteed; sort by id before asserting the shared params.
         sorted_calls = sorted(calls, key=lambda c: c[0])
-        assert sorted_calls[0] == ("e1", 21, 2.0 / 3.0)
-        assert sorted_calls[1] == ("e2", 21, 2.0 / 3.0)
+        assert sorted_calls[0] == ("e1", 21, 2.0 / 3.0, PASS_THRESHOLD)
+        assert sorted_calls[1] == ("e2", 21, 2.0 / 3.0, PASS_THRESHOLD)
+
+    def test_forwards_custom_pass_threshold_to_adaptive(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            plugin, "resolve_runner", lambda _spec: ("claude", "m", _FakeRunner())
+        )
+        monkeypatch.setattr(
+            plugin,
+            "load_evals",
+            lambda _path, _handlers: [{"id": "e1", "assertions": []}],
+        )
+        custom = 0.95
+        calls: list[float] = []
+
+        def fake_adaptive(
+            item: dict[str, Any],
+            repo_root: Path,
+            skill_name: str,
+            max_trials: int,
+            target: float,
+            checks: list[Any],
+            *,
+            pass_threshold: float = PASS_THRESHOLD,
+            gate: Any = None,
+            isolate: bool = False,
+            model: str,
+            runner: Any = None,
+        ) -> list[EvalRun]:
+            calls.append(pass_threshold)
+            return [
+                EvalRun(
+                    eval_id=item["id"],
+                    prompt="",
+                    skill_invoked=False,
+                    assistant_text="",
+                )
+            ]
+
+        monkeypatch.setattr(plugin, "run_eval_adaptive", fake_adaptive)
+
+        self._fixture_fn()(
+            _StubConfig(21, 2.0 / 3.0, pass_threshold=custom)
+        )
+
+        assert calls == [custom]
