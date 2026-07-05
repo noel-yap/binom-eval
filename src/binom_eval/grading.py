@@ -606,6 +606,35 @@ def trial_outcomes_passed(
     return eval_passed(passes, len(outcomes), target)
 
 
+def format_posterior_summary(
+    label: str,
+    passes: int,
+    trials: int,
+    target: float,
+) -> str:
+    """One-line summary of ``P(rate >= p0 | k, n)`` for pytest output.
+
+    ``p0`` is the target pass rate, ``k`` the pass count, ``n`` the trial
+    count. Returns ``p_good = P(rate >= p0 | k, n)`` under the Beta(1, 1)
+    posterior.
+    """
+    p_good = posterior_pass_prob(passes, trials, target)
+    return (
+        f"{label}: {passes}/{trials} trials passed; "
+        f"P(rate >= {target:.3f} | k={passes}, n={trials}) = {p_good:.3f}"
+    )
+
+
+def trial_outcomes_posterior_summary(
+    outcomes: list[tuple[int, TrialFailure | None]],
+    target: float,
+    label: str,
+) -> str:
+    """``format_posterior_summary`` for a ``trial_outcomes`` result list."""
+    passes = sum(1 for _, err in outcomes if err is None)
+    return format_posterior_summary(label, passes, len(outcomes), target)
+
+
 def trial_outcomes_failure_message(
     outcomes: list[tuple[int, TrialFailure | None]],
     target: float,
@@ -624,7 +653,6 @@ def trial_outcomes_failure_message(
     """
     passes = sum(1 for _, err in outcomes if err is None)
     trials = len(outcomes)
-    p_good = posterior_pass_prob(passes, trials, target)
     detail = "\n".join(
         _format_trial_failure(idx, err, max_chars)
         for idx, err in outcomes
@@ -633,9 +661,9 @@ def trial_outcomes_failure_message(
     if not trials:
         detail = "  (no gradeable trials: every trial errored)"
     return (
-        f"{label}: {passes}/{trials} trials passed; "
-        f"P(rate >= {target:.3f}) = {p_good:.3f} "
-        f"(need >= 0.5).\nFailing trials:\n{detail}"
+        format_posterior_summary(label, passes, trials, target)
+        + " (need >= 0.5).\nFailing trials:\n"
+        + detail
     )
 
 

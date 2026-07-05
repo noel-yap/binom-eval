@@ -20,7 +20,12 @@ from binom_eval.grading import (
     FAILURE_SECTION_MAX_CHARS,
     PASS_THRESHOLD,
 )
-from binom_eval.plugin import make_eval_runs_fixture, pytest_addoption
+from binom_eval.plugin import (
+    LIVE_EVAL_POSTERIOR_PROPERTY,
+    make_eval_runs_fixture,
+    pytest_addoption,
+    record_live_eval_posterior,
+)
 
 
 class _StubParser:
@@ -46,6 +51,7 @@ class TestPytestAddOption:
         assert "--live-eval-pass-threshold" in options
         assert "--live-eval-model" in options
         assert "--live-eval-failure-max-chars" in options
+        assert "--live-eval-show-posterior" in options
 
     def test_max_trials_defaults_to_constant_and_is_int(self) -> None:
         opt = self._options()["--live-eval-max-trials"]
@@ -66,6 +72,11 @@ class TestPytestAddOption:
         opt = self._options()["--live-eval-failure-max-chars"]
         assert opt["default"] == FAILURE_SECTION_MAX_CHARS
         assert opt["type"] is int
+
+    def test_show_posterior_defaults_to_false(self) -> None:
+        opt = self._options()["--live-eval-show-posterior"]
+        assert opt["default"] is False
+        assert opt["action"] == "store_true"
 
     def test_model_has_no_default_and_is_str(self) -> None:
         # No default: the `backend:` prefix is mandatory, so a live run must
@@ -327,3 +338,130 @@ class TestMakeEvalRunsFixture:
         )
 
         assert calls == [custom]
+
+
+class _StubTerminalReporter:
+    """Collects the lines the posterior reporter writes."""
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def ensure_newline(self) -> None:
+        pass
+
+    def write_line(self, line: str, **kwargs: Any) -> None:
+        self.lines.append(line)
+
+
+class _StubPluginManager:
+    def __init__(self, terminalreporter: Any) -> None:
+        self._terminalreporter = terminalreporter
+
+    def get_plugin(self, name: str) -> Any:
+        return self._terminalreporter
+
+
+class _StubReporterConfig:
+    """Config stub exposing just the pluginmanager the reporter uses."""
+
+    def __init__(self, terminalreporter: Any) -> None:
+        self.pluginmanager = _StubPluginManager(terminalreporter)
+
+
+class _StubReport:
+    def __init__(
+        self,
+        user_properties: list[tuple[str, str]],
+        *,
+        when: str = "call",
+        passed: bool = True,
+    ) -> None:
+        self.user_properties = user_properties
+        self.when = when
+        self.passed = passed
+
+
+class TestPosteriorReporting:
+    def test_record_live_eval_posterior_attaches_user_property(self) -> None:
+        class _Node:
+            def __init__(self) -> None:
+                self.user_properties: list[tuple[str, str]] = []
+
+        summary = "demo::check: P(rate >= 0.600 | k=3, n=3) = 0.800"
+        node = _Node()
+        record_live_eval_posterior(node, summary)
+        assert node.user_properties == [
+            (LIVE_EVAL_POSTERIOR_PROPERTY, summary)
+        ]
+
+    def test_runtest_logreport_prints_posterior_on_pass(self) -> None:
+        terminal = _StubTerminalReporter()
+        reporter = plugin._SessionReporter(
+            _StubReporterConfig(terminal), show_posterior=True
+        )
+        summary = "demo: P(rate >= 0.600 | k=3, n=3) = 0.800"
+        report = _StubReport([(LIVE_EVAL_POSTERIOR_PROPERTY, summary)])
+
+        reporter.pytest_runtest_logreport(report)
+
+        assert terminal.lines == [summary]
+
+    def test_runtest_logreport_skips_when_disabled(self) -> None:
+        terminal = _StubTerminalReporter()
+        reporter = plugin._SessionReporter(
+            _StubReporterConfig(terminal), show_posterior=False
+        )
+        report = _StubReport([(LIVE_EVAL_POSTERIOR_PROPERTY, "hidden")])
+
+        reporter.pytest_runtest_logreport(report)
+
+        assert terminal.lines == []
+
+    def test_runtest_logreport_skips_setup_phase(self) -> None:
+        terminal = _StubTerminalReporter()
+        reporter = plugin._SessionReporter(
+            _StubReporterConfig(terminal), show_posterior=True
+        )
+        report = _StubReport(
+            [(LIVE_EVAL_POSTERIOR_PROPERTY, "early")], when="setup"
+        )
+
+        reporter.pytest_runtest_logreport(report)
+
+        assert terminal.lines == []
+
+    def test_runtest_logreport_skips_failed_test(self) -> None:
+        terminal = _StubTerminalReporter()
+        reporter = plugin._SessionReporter(
+            _StubReporterConfig(terminal), show_posterior=True
+        )
+        report = _StubReport(
+            [(LIVE_EVAL_POSTERIOR_PROPERTY, "nope")], passed=False
+        )
+
+        reporter.pytest_runtest_logreport(report)
+
+        assert terminal.lines == []
+
+    def test_runtest_logreport_ignores_unrelated_properties(
+        self,
+    ) -> None:
+        terminal = _StubTerminalReporter()
+        reporter = plugin._SessionReporter(
+            _StubReporterConfig(terminal), show_posterior=True
+        )
+        report = _StubReport([("some_other_property", "x")])
+
+        reporter.pytest_runtest_logreport(report)
+
+        assert terminal.lines == []
+
+    def test_runtest_logreport_tolerates_missing_terminal(self) -> None:
+        reporter = plugin._SessionReporter(
+            _StubReporterConfig(None), show_posterior=True
+        )
+        report = _StubReport(
+            [(LIVE_EVAL_POSTERIOR_PROPERTY, "orphan")]
+        )
+
+        reporter.pytest_runtest_logreport(report)  # must not raise

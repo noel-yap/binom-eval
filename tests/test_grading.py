@@ -46,6 +46,7 @@ from binom_eval import (
     trial_outcomes,
     trial_outcomes_failure_message,
     trial_outcomes_passed,
+    trial_outcomes_posterior_summary,
     trigger_pass_counts,
 )
 from binom_eval.grading import Verdict, _betainc, _resolve_shortfall, _verdict
@@ -275,10 +276,46 @@ class TestTrialOutcomesGrading:
 
     def test_failure_message_reports_p_good(self) -> None:
         outcomes = [(0, TrialFailure("bad")), (1, TrialFailure("bad"))]
-        with pytest.raises(AssertionError, match=r"P\(rate >= 0\.667\)"):
+        with pytest.raises(
+            AssertionError, match=r"P\(rate >= 0\.667 \| k=0, n=2\)"
+        ):
             assert trial_outcomes_passed(outcomes, TARGET), (
                 trial_outcomes_failure_message(outcomes, TARGET, "x")
             )
+
+    def test_posterior_summary_reports_rate_and_counts(self) -> None:
+        outcomes = [(0, None), (1, None), (2, None)]
+        summary = trial_outcomes_posterior_summary(
+            outcomes, TARGET, "demo::check"
+        )
+        assert summary.startswith(
+            "demo::check: 3/3 trials passed; "
+            "P(rate >= 0.667 | k=3, n=3) = "
+        )
+        p_good = float(summary.rsplit("= ", 1)[-1])
+        assert p_good == pytest.approx(
+            posterior_pass_prob(3, 3, TARGET), abs=1e-3
+        )
+
+    def test_posterior_summary_counts_only_clean_trials(self) -> None:
+        outcomes = [
+            (0, None),
+            (1, TrialFailure("bad")),
+            (2, None),
+        ]
+        summary = trial_outcomes_posterior_summary(
+            outcomes, TARGET, "demo::check"
+        )
+        assert summary.startswith(
+            "demo::check: 2/3 trials passed; "
+            "P(rate >= 0.667 | k=2, n=3) = "
+        )
+
+    def test_posterior_summary_handles_no_trials(self) -> None:
+        summary = trial_outcomes_posterior_summary([], TARGET, "empty")
+        assert summary.startswith(
+            "empty: 0/0 trials passed; P(rate >= 0.667 | k=0, n=0) = "
+        )
 
     def test_failure_message_renders_structured_sections(self) -> None:
         outcomes = [

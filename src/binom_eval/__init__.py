@@ -22,7 +22,7 @@ only as many trials as the verdict needs. The package is split by concern:
     `run_eval_adaptive`), and the rollups used to grade a batch.
   * `plugin` -- the pytest options, the `live_eval` marker,
     `live_eval_target_rate`, `live_eval_pass_threshold`,
-    `live_eval_failure_max_chars`, and
+    `live_eval_failure_max_chars`, `live_eval_show_posterior`, and
     `make_eval_runs_fixture`. Registered as a
     pytest plugin (entry point `pytest11`), so installing the package wires
     up the `--live-eval-*` options and the `live_eval` marker automatically.
@@ -60,6 +60,7 @@ from binom_eval.grading import (
     expand_eval_item,
     expand_evals,
     failing_assertions,
+    format_posterior_summary,
     graded_runs,
     load_evals,
     next_batch_size,
@@ -68,6 +69,7 @@ from binom_eval.grading import (
     trial_outcomes,
     trial_outcomes_failure_message,
     trial_outcomes_passed,
+    trial_outcomes_posterior_summary,
     trigger_pass_counts,
 )
 from binom_eval.plugin import (
@@ -76,10 +78,12 @@ from binom_eval.plugin import (
     DEFAULT_TARGET_RATE,
     live_eval_failure_max_chars,
     live_eval_pass_threshold,
+    live_eval_show_posterior,
     live_eval_target_rate,
     make_eval_runs_fixture,
     pytest_addoption,
     pytest_configure,
+    record_live_eval_posterior,
 )
 from binom_eval.suite import bind_eval_runs_fixture, register_live_eval_tests
 from binom_eval.runner import (
@@ -178,6 +182,7 @@ __all__ = [
     "expand_eval_item",
     "expand_evals",
     "failing_assertions",
+    "format_posterior_summary",
     "graded_runs",
     "load_evals",
     "next_batch_size",
@@ -186,6 +191,7 @@ __all__ = [
     "trial_outcomes",
     "trial_outcomes_failure_message",
     "trial_outcomes_passed",
+    "trial_outcomes_posterior_summary",
     "trigger_pass_counts",
     # plugin
     "DEFAULT_CONCURRENCY",
@@ -193,10 +199,12 @@ __all__ = [
     "DEFAULT_TARGET_RATE",
     "live_eval_failure_max_chars",
     "live_eval_pass_threshold",
+    "live_eval_show_posterior",
     "live_eval_target_rate",
     "make_eval_runs_fixture",
     "pytest_addoption",
     "pytest_configure",
+    "record_live_eval_posterior",
     # suite
     "bind_eval_runs_fixture",
     "register_live_eval_tests",

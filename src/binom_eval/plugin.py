@@ -52,6 +52,14 @@ DEFAULT_CONCURRENCY = 5
 # not red-flagging working skills over catching mildly-broken (~0.6) ones.
 DEFAULT_TARGET_RATE = 3.0 / 5.0
 
+LIVE_EVAL_POSTERIOR_PROPERTY = "live_eval_posterior"
+
+
+def record_live_eval_posterior(node: pytest.Item, summary: str) -> None:
+    """Attach a posterior summary to a test node for terminal display."""
+    node.user_properties.append((LIVE_EVAL_POSTERIOR_PROPERTY, summary))
+
+
 class _SessionReporter:
     """Pytest plugin that surfaces the selected backend, CLI version, and
     model in output.
@@ -64,10 +72,14 @@ class _SessionReporter:
     stream-json response.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self, config: pytest.Config, *, show_posterior: bool = False
+    ) -> None:
+        self._config = config
         self._backend: str = ""
         self._version: str = ""
         self._model: str = ""
+        self._show_posterior = show_posterior
 
     def set_backend(self, backend: str, version: str) -> None:
         self._backend = backend
@@ -80,6 +92,29 @@ class _SessionReporter:
         if self._version:
             return [f"{self._backend} CLI: {self._version}"]
         return []
+
+    def pytest_runtest_logreport(self, report: Any) -> None:
+        if (
+            not self._show_posterior
+            or report.when != "call"
+            or not report.passed
+        ):
+            return
+        lines = [
+            value
+            for name, value in report.user_properties
+            if name == LIVE_EVAL_POSTERIOR_PROPERTY
+        ]
+        if not lines:
+            return
+        terminalreporter = self._config.pluginmanager.get_plugin(
+            "terminalreporter"
+        )
+        if terminalreporter is None:
+            return
+        terminalreporter.ensure_newline()
+        for line in lines:
+            terminalreporter.write_line(line)
 
     def pytest_terminal_summary(
         self, terminalreporter: Any, exitstatus: Any, config: Any
@@ -182,6 +217,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             f"{FAILURE_SECTION_MAX_CHARS}."
         ),
     )
+    parser.addoption(
+        "--live-eval-show-posterior",
+        action="store_true",
+        default=False,
+        help=(
+            "After each passing live-eval check, print "
+            "P(rate >= p0 | k, n) -- the posterior mass at or above the "
+            "target rate p0 given k passes out of n trials."
+        ),
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -198,7 +243,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "live_eval: end-to-end test that invokes a live agent CLI (real model "
         "call). Select with `-m live_eval`; exclude with `-m 'not live_eval'`.",
     )
-    reporter = _SessionReporter()
+    reporter = _SessionReporter(
+        config,
+        show_posterior=config.getoption("--live-eval-show-posterior"),
+    )
     try:
         backend, _model, runner = resolve_runner(
             config.getoption("--live-eval-model")
@@ -326,3 +374,9 @@ def live_eval_pass_threshold(pytestconfig: pytest.Config) -> float:
 def live_eval_failure_max_chars(pytestconfig: pytest.Config) -> int:
     """Per-section character cap for rendered trial-failure sections."""
     return pytestconfig.getoption("--live-eval-failure-max-chars")
+
+
+@pytest.fixture(scope="session")
+def live_eval_show_posterior(pytestconfig: pytest.Config) -> bool:
+    """When true, passing checks print ``P(rate >= p0 | k, n)``."""
+    return pytestconfig.getoption("--live-eval-show-posterior")
