@@ -18,14 +18,19 @@ from binom_eval.grading import (
     eval_passed,
     expand_evals,
     failing_assertions,
+    format_posterior_summary,
     graded_runs,
     load_evals,
     trial_outcomes,
     trial_outcomes_failure_message,
     trial_outcomes_passed,
+    trial_outcomes_posterior_summary,
     trigger_pass_counts,
 )
-from binom_eval.plugin import make_eval_runs_fixture
+from binom_eval.plugin import (
+    make_eval_runs_fixture,
+    record_live_eval_posterior,
+)
 from binom_eval.stream_json import EvalRun, agent_invoked
 
 TriggerMode = Literal["skill", "agent"]
@@ -83,6 +88,19 @@ def _agent_trigger_pass_counts(
     ]
 
 
+def _record_count_posteriors(
+    request: pytest.FixtureRequest,
+    counts: list[tuple[str, int, int]],
+    target: float,
+) -> None:
+    """Attach a posterior summary per ``(label, passes, trials)`` triple."""
+    for label, passes, trials in counts:
+        record_live_eval_posterior(
+            request.node,
+            format_posterior_summary(label, passes, trials, target),
+        )
+
+
 def register_live_eval_tests(
     namespace: ModuleType | dict[str, Any],
     *,
@@ -115,13 +133,23 @@ def register_live_eval_tests(
         eval_runs: dict[str, list[EvalRun]],
         live_eval_target_rate: float,
         live_eval_failure_max_chars: int,
+        live_eval_show_posterior: bool,
+        request: pytest.FixtureRequest,
         eval_id: str,
         assertion_id: str,
     ) -> None:
         handler = handlers[assertion_id]
         outcomes = trial_outcomes(eval_runs[eval_id], handler)
         label = f"{eval_id}::{assertion_id}"
-        assert trial_outcomes_passed(outcomes, live_eval_target_rate), (
+        passed = trial_outcomes_passed(outcomes, live_eval_target_rate)
+        if live_eval_show_posterior and passed:
+            record_live_eval_posterior(
+                request.node,
+                trial_outcomes_posterior_summary(
+                    outcomes, live_eval_target_rate, label
+                ),
+            )
+        assert passed, (
             trial_outcomes_failure_message(
                 outcomes,
                 live_eval_target_rate,
@@ -135,6 +163,8 @@ def register_live_eval_tests(
     def test_eval_expectation(
         eval_runs: dict[str, list[EvalRun]],
         live_eval_target_rate: float,
+        live_eval_show_posterior: bool,
+        request: pytest.FixtureRequest,
         eval_id: str,
     ) -> None:
         ev = next(e for e in evals if e["id"] == eval_id)
@@ -144,6 +174,18 @@ def register_live_eval_tests(
             handlers,
             live_eval_target_rate,
         )
+        if live_eval_show_posterior and not failing:
+            for assertion in ev["assertions"]:
+                handler = handlers[assertion["id"]]
+                outcomes = trial_outcomes(eval_runs[eval_id], handler)
+                record_live_eval_posterior(
+                    request.node,
+                    trial_outcomes_posterior_summary(
+                        outcomes,
+                        live_eval_target_rate,
+                        f"{eval_id}::{assertion['id']}",
+                    ),
+                )
         assert not failing, (
             f"{eval_id}: {len(failing)} assertion(s) below the bar "
             f"(P(rate >= {live_eval_target_rate:.3f}) must be >= 0.5):\n"
@@ -160,6 +202,8 @@ def register_live_eval_tests(
         def test_should_trigger_evals_invoked_skill(
             eval_runs: dict[str, list[EvalRun]],
             live_eval_target_rate: float,
+            live_eval_show_posterior: bool,
+            request: pytest.FixtureRequest,
         ) -> None:
             counts = trigger_pass_counts(eval_runs, evals)
             failures = [
@@ -167,6 +211,10 @@ def register_live_eval_tests(
                 for eid, n, total in counts
                 if not eval_passed(n, total, live_eval_target_rate)
             ]
+            if live_eval_show_posterior and not failures:
+                _record_count_posteriors(
+                    request, counts, live_eval_target_rate
+                )
             assert not failures, (
                 f"{subject_name} invoked below the bar "
                 f"(P(rate >= {live_eval_target_rate:.3f}) must be >= 0.5): "
@@ -180,6 +228,8 @@ def register_live_eval_tests(
         def test_should_invoke_agent_evals(
             eval_runs: dict[str, list[EvalRun]],
             live_eval_target_rate: float,
+            live_eval_show_posterior: bool,
+            request: pytest.FixtureRequest,
         ) -> None:
             counts = _agent_trigger_pass_counts(
                 eval_runs, evals_path, subject_name, agent_trigger_assertion
@@ -189,6 +239,10 @@ def register_live_eval_tests(
                 for eid, n, total in counts
                 if not eval_passed(n, total, live_eval_target_rate)
             ]
+            if live_eval_show_posterior and not failures:
+                _record_count_posteriors(
+                    request, counts, live_eval_target_rate
+                )
             assert not failures, (
                 f"{subject_name} agent invoked below the bar "
                 f"(P(rate >= {live_eval_target_rate:.3f}) must be >= 0.5): "
