@@ -21,7 +21,9 @@ pytest path/to/evals -m live_eval \
     --live-eval-concurrency 8 \
     --live-eval-isolate \
     --live-eval-model claude:claude-sonnet-4-6 \
-    --live-eval-failure-max-chars 10000
+    --live-eval-failure-max-chars 10000 \
+    --live-eval-pass-threshold 0.95 \
+    --live-eval-show-posterior
 ```
 
 `--live-eval-model` is required for live evals and selects the backend and
@@ -32,6 +34,12 @@ once per backend to grade on both.
 
 `--live-eval-failure-max-chars` caps each failure section rendered in pytest
 output (default 2000; zero or negative disables truncation).
+
+`--live-eval-pass-threshold` overrides the verdict band's PASS edge
+(default `PASS_THRESHOLD`; must be strictly between 0.5 and 1.0 --
+the FAIL edge follows as its complement). `--live-eval-show-posterior`
+prints `P(rate >= p0 | k, n)` for each passing check, for calibrating
+the target rate and pass threshold.
 
 ## Architecture
 
@@ -52,7 +60,8 @@ output (default 2000; zero or negative disables truncation).
 
 - Prior: `Beta(1, 1)` (uniform). Posterior after `k` passes / `n` trials: `Beta(1+k, 1+(n-k))`.
 - `p_good = P(θ ≥ TARGET_RATE | k, n)` via `_betainc` (Lentz continued fraction, stdlib only).
-- PASS once `p_good > PASS_THRESHOLD` (≈0.865), FAIL once `p_good < FAIL_THRESHOLD` (≈0.135).
+- PASS once `p_good > PASS_THRESHOLD` (≈0.865), FAIL once `p_good < FAIL_THRESHOLD` (≈0.135);
+  the PASS edge is overridable per run via `--live-eval-pass-threshold`.
 - Adaptive: `next_batch_size` computes the optimistic shortfall per undetermined check, floors at `BATCH_FLOOR=3`, caps at remaining budget.
 - Budget tiebreak at `p_good >= 0.5` if `MAX_TRIALS` exhausted inside the band.
 - Errored trials (`EvalRun.errored`: CLI died, `is_error` result event, retries exhausted — see `TRIAL_RETRY` in `runner/`) are excluded from every posterior count via `graded_runs`, but still spend the trial budget.
