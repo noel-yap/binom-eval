@@ -15,16 +15,20 @@ from typing import Any, Literal
 import pytest
 
 from binom_eval.grading import (
+    _trigger_check,
+    assert_check,
     eval_passed,
     expand_evals,
     failing_assertions,
     format_posterior_summary,
     graded_runs,
+    graded_runs_verbose_message,
     load_evals,
     trial_outcomes,
     trial_outcomes_failure_message,
     trial_outcomes_passed,
     trial_outcomes_posterior_summary,
+    trial_outcomes_verbose_message,
     trigger_pass_counts,
 )
 from binom_eval.plugin import (
@@ -88,20 +92,79 @@ def _agent_trigger_pass_counts(
     ]
 
 
+def _agent_trigger_check(agent_name: str) -> Callable[[EvalRun], None]:
+    def check(run: EvalRun) -> None:
+        sections = (("Assistant reply", run.assistant_text or "(empty)"),)
+        assert_check(
+            agent_invoked(run, agent_name),
+            "agent was not invoked",
+            sections=sections,
+        )
+
+    return check
+
+
 def _record_count_posteriors(
     request: pytest.FixtureRequest,
+    eval_runs: dict[str, list[EvalRun]],
     counts: list[tuple[str, int, int]],
     target: float,
     pass_threshold: float,
+    *,
+    verbose: bool = False,
+    max_chars: int = 0,
+    check: Callable[[EvalRun], None] | None = None,
 ) -> None:
     """Attach a posterior summary per ``(label, passes, trials)`` triple."""
     for label, passes, trials in counts:
-        record_live_eval_posterior(
-            request.node,
-            format_posterior_summary(
-                label, passes, trials, target, pass_threshold=pass_threshold
-            ),
+        if verbose and check is not None:
+            record_live_eval_posterior(
+                request.node,
+                graded_runs_verbose_message(
+                    eval_runs[label],
+                    label,
+                    passes,
+                    trials,
+                    target,
+                    check,
+                    pass_threshold=pass_threshold,
+                    max_chars=max_chars,
+                ),
+            )
+        else:
+            record_live_eval_posterior(
+                request.node,
+                format_posterior_summary(
+                    label, passes, trials, target, pass_threshold=pass_threshold
+                ),
+            )
+
+
+def _pass_summary(
+    runs: list[EvalRun],
+    outcomes: list[tuple[int, Any]],
+    handler: Callable[[EvalRun], None],
+    target: float,
+    label: str,
+    *,
+    pass_threshold: float,
+    max_chars: int,
+    verbose: bool,
+) -> str:
+    """Pass-side summary: full trial detail when verbose, else one line."""
+    if verbose:
+        return trial_outcomes_verbose_message(
+            runs,
+            outcomes,
+            handler,
+            target,
+            label,
+            pass_threshold=pass_threshold,
+            max_chars=max_chars,
         )
+    return trial_outcomes_posterior_summary(
+        outcomes, target, label, pass_threshold=pass_threshold
+    )
 
 
 def register_live_eval_tests(
@@ -137,6 +200,7 @@ def register_live_eval_tests(
         live_eval_target_rate: float,
         live_eval_pass_threshold: float,
         live_eval_failure_max_chars: int,
+        live_eval_verbose: bool,
         live_eval_show_posterior: bool,
         request: pytest.FixtureRequest,
         eval_id: str,
@@ -146,16 +210,18 @@ def register_live_eval_tests(
         outcomes = trial_outcomes(eval_runs[eval_id], handler)
         label = f"{eval_id}::{assertion_id}"
         passed = trial_outcomes_passed(outcomes, live_eval_target_rate)
-        if live_eval_show_posterior and passed:
-            record_live_eval_posterior(
-                request.node,
-                trial_outcomes_posterior_summary(
-                    outcomes,
-                    live_eval_target_rate,
-                    label,
-                    pass_threshold=live_eval_pass_threshold,
-                ),
+        if passed and (live_eval_verbose or live_eval_show_posterior):
+            summary = _pass_summary(
+                eval_runs[eval_id],
+                outcomes,
+                handler,
+                live_eval_target_rate,
+                label,
+                pass_threshold=live_eval_pass_threshold,
+                max_chars=live_eval_failure_max_chars,
+                verbose=live_eval_verbose,
             )
+            record_live_eval_posterior(request.node, summary)
         assert passed, (
             trial_outcomes_failure_message(
                 outcomes,
@@ -171,6 +237,8 @@ def register_live_eval_tests(
         eval_runs: dict[str, list[EvalRun]],
         live_eval_target_rate: float,
         live_eval_pass_threshold: float,
+        live_eval_failure_max_chars: int,
+        live_eval_verbose: bool,
         live_eval_show_posterior: bool,
         request: pytest.FixtureRequest,
         eval_id: str,
@@ -182,19 +250,22 @@ def register_live_eval_tests(
             handlers,
             live_eval_target_rate,
         )
-        if live_eval_show_posterior and not failing:
+        if not failing and (live_eval_verbose or live_eval_show_posterior):
             for assertion in ev["assertions"]:
                 handler = handlers[assertion["id"]]
                 outcomes = trial_outcomes(eval_runs[eval_id], handler)
-                record_live_eval_posterior(
-                    request.node,
-                    trial_outcomes_posterior_summary(
-                        outcomes,
-                        live_eval_target_rate,
-                        f"{eval_id}::{assertion['id']}",
-                        pass_threshold=live_eval_pass_threshold,
-                    ),
+                label = f"{eval_id}::{assertion['id']}"
+                summary = _pass_summary(
+                    eval_runs[eval_id],
+                    outcomes,
+                    handler,
+                    live_eval_target_rate,
+                    label,
+                    pass_threshold=live_eval_pass_threshold,
+                    max_chars=live_eval_failure_max_chars,
+                    verbose=live_eval_verbose,
                 )
+                record_live_eval_posterior(request.node, summary)
         assert not failing, (
             f"{eval_id}: {len(failing)} assertion(s) below the bar "
             f"(P(θ ≥ {live_eval_target_rate:.3f}) must be >= 0.5):\n"
@@ -212,6 +283,8 @@ def register_live_eval_tests(
             eval_runs: dict[str, list[EvalRun]],
             live_eval_target_rate: float,
             live_eval_pass_threshold: float,
+            live_eval_failure_max_chars: int,
+            live_eval_verbose: bool,
             live_eval_show_posterior: bool,
             request: pytest.FixtureRequest,
         ) -> None:
@@ -221,12 +294,16 @@ def register_live_eval_tests(
                 for eid, n, total in counts
                 if not eval_passed(n, total, live_eval_target_rate)
             ]
-            if live_eval_show_posterior and not failures:
+            if not failures and (live_eval_verbose or live_eval_show_posterior):
                 _record_count_posteriors(
                     request,
+                    eval_runs,
                     counts,
                     live_eval_target_rate,
                     live_eval_pass_threshold,
+                    verbose=live_eval_verbose,
+                    max_chars=live_eval_failure_max_chars,
+                    check=_trigger_check,
                 )
             assert not failures, (
                 f"{subject_name} invoked below the bar "
@@ -236,12 +313,15 @@ def register_live_eval_tests(
 
         trigger_test = test_should_trigger_evals_invoked_skill
     else:
+        agent_check = _agent_trigger_check(subject_name)
 
         @pytest.mark.live_eval
         def test_should_invoke_agent_evals(
             eval_runs: dict[str, list[EvalRun]],
             live_eval_target_rate: float,
             live_eval_pass_threshold: float,
+            live_eval_failure_max_chars: int,
+            live_eval_verbose: bool,
             live_eval_show_posterior: bool,
             request: pytest.FixtureRequest,
         ) -> None:
@@ -253,12 +333,16 @@ def register_live_eval_tests(
                 for eid, n, total in counts
                 if not eval_passed(n, total, live_eval_target_rate)
             ]
-            if live_eval_show_posterior and not failures:
+            if not failures and (live_eval_verbose or live_eval_show_posterior):
                 _record_count_posteriors(
                     request,
+                    eval_runs,
                     counts,
                     live_eval_target_rate,
                     live_eval_pass_threshold,
+                    verbose=live_eval_verbose,
+                    max_chars=live_eval_failure_max_chars,
+                    check=agent_check,
                 )
             assert not failures, (
                 f"{subject_name} agent invoked below the bar "

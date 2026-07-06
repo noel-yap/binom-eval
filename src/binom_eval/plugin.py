@@ -55,6 +55,15 @@ DEFAULT_TARGET_RATE = 3.0 / 5.0
 LIVE_EVAL_POSTERIOR_PROPERTY = "live_eval_posterior"
 
 
+def live_eval_pass_output_enabled(config: pytest.Config) -> bool:
+    """True when passing checks should print grading summaries to the
+    terminal.
+    """
+    return config.getoption("--live-eval-verbose") or config.getoption(
+        "--live-eval-show-posterior"
+    )
+
+
 def record_live_eval_posterior(node: pytest.Item, summary: str) -> None:
     """Attach a posterior summary to a test node for terminal display."""
     node.user_properties.append((LIVE_EVAL_POSTERIOR_PROPERTY, summary))
@@ -73,13 +82,13 @@ class _SessionReporter:
     """
 
     def __init__(
-        self, config: pytest.Config, *, show_posterior: bool = False
+        self, config: pytest.Config, *, verbose: bool = False
     ) -> None:
         self._config = config
         self._backend: str = ""
         self._version: str = ""
         self._model: str = ""
-        self._show_posterior = show_posterior
+        self._verbose = verbose
 
     def set_backend(self, backend: str, version: str) -> None:
         self._backend = backend
@@ -95,7 +104,7 @@ class _SessionReporter:
 
     def pytest_runtest_logreport(self, report: Any) -> None:
         if (
-            not self._show_posterior
+            not self._verbose
             or report.when != "call"
             or not report.passed
         ):
@@ -218,13 +227,24 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         ),
     )
     parser.addoption(
+        "--live-eval-verbose",
+        action="store_true",
+        default=False,
+        help=(
+            "After each passing live-eval check, print full grading detail "
+            "(posterior summary plus every trial's assistant reply and tool "
+            "uses, using the same layout as failure output but without error "
+            "wording). Respects --live-eval-failure-max-chars."
+        ),
+    )
+    parser.addoption(
         "--live-eval-show-posterior",
         action="store_true",
         default=False,
         help=(
-            "After each passing live-eval check, print P(θ ≥ θ₀ | k, n) at "
-            "the configured target and max θ₀ (pass@τ | k, n) -- the highest "
-            "target that still PASS-locks at --live-eval-pass-threshold."
+            "After each passing live-eval check, print the one-line "
+            "posterior summary (P(θ ≥ θ₀ | k, n) and max θ₀). Use "
+            "--live-eval-verbose for full per-trial detail."
         ),
     )
 
@@ -245,7 +265,7 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     reporter = _SessionReporter(
         config,
-        show_posterior=config.getoption("--live-eval-show-posterior"),
+        verbose=live_eval_pass_output_enabled(config),
     )
     try:
         backend, _model, runner = resolve_runner(
@@ -377,6 +397,12 @@ def live_eval_failure_max_chars(pytestconfig: pytest.Config) -> int:
 
 
 @pytest.fixture(scope="session")
+def live_eval_verbose(pytestconfig: pytest.Config) -> bool:
+    """When true, passing checks print full trial detail to the terminal."""
+    return pytestconfig.getoption("--live-eval-verbose")
+
+
+@pytest.fixture(scope="session")
 def live_eval_show_posterior(pytestconfig: pytest.Config) -> bool:
-    """When true, passing checks print ``P(θ ≥ θ₀ | k, n)`` and ``max θ₀``."""
+    """When true, passing checks print the one-line posterior summary only."""
     return pytestconfig.getoption("--live-eval-show-posterior")

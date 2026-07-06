@@ -34,8 +34,10 @@ from binom_eval import (
     _eval_checks,
     _no_other_skill_check,
     _trigger_check,
+    assert_check,
     assert_handler_coverage,
     eval_passed,
+    evaluate_check,
     expand_eval_item,
     expand_evals,
     failing_assertions,
@@ -48,6 +50,7 @@ from binom_eval import (
     trial_outcomes_failure_message,
     trial_outcomes_passed,
     trial_outcomes_posterior_summary,
+    trial_outcomes_verbose_message,
     trigger_pass_counts,
 )
 from binom_eval.grading import Verdict, _betainc, _resolve_shortfall, _verdict
@@ -64,7 +67,7 @@ def _runs(*passed: bool) -> list[EvalRun]:
 
 
 def _errored_run() -> EvalRun:
-    """A trial that never produced a gradeable result (see EvalRun.errored)."""
+    """A trial that never produced a gradable result (see EvalRun.errored)."""
     return EvalRun(
         eval_id="t",
         prompt="",
@@ -389,6 +392,166 @@ class TestTrialOutcomesGrading:
         )
         assert body in message
         assert "chars truncated" not in message
+
+
+class TestTrialOutcomesVerboseMessage:
+    def test_lists_every_trial_with_assert_check_sections(self) -> None:
+        runs = [
+            EvalRun(
+                eval_id="t",
+                prompt="",
+                skill_invoked=True,
+                assistant_text="```\nexample-marker\n```",
+            ),
+        ]
+
+        def check(run: EvalRun) -> None:
+            blocks = [run.assistant_text]
+            sections = (
+                ("Expected marker", "example-marker"),
+                ("Code blocks", blocks[0]),
+            )
+            assert_check(True, "missing marker", sections=sections)
+
+        outcomes = trial_outcomes(runs, check)
+        message = trial_outcomes_verbose_message(
+            runs,
+            outcomes,
+            check,
+            TARGET,
+            "demo::check",
+            pass_threshold=PASS_THRESHOLD,
+        )
+        assert "Trials:" in message
+        assert "trial 0: passed" in message
+        assert "Expected marker:" in message
+        assert "example-marker" in message
+        assert "Code blocks:" in message
+        assert "need >= 0.5" not in message
+        assert "Failing trials:" not in message
+        assert "max θ₀ (pass@τ=" in message
+
+    def test_renders_failing_trials_like_failure_message(self) -> None:
+        runs = _runs(True, False)
+
+        def check(run: EvalRun) -> None:
+            assert_check(run.skill_invoked, "miss")
+
+        outcomes = trial_outcomes(runs, check)
+        message = trial_outcomes_verbose_message(
+            runs, outcomes, check, TARGET, "demo::check"
+        )
+        assert "trial 1: miss" in message
+
+    def test_notes_when_every_trial_errored(self) -> None:
+        runs = [_errored_run(), _errored_run()]
+
+        def check(run: EvalRun) -> None:
+            assert_check(run.skill_invoked, "miss")
+
+        outcomes = trial_outcomes(runs, check)
+        message = trial_outcomes_verbose_message(
+            runs, outcomes, check, TARGET, "demo::check"
+        )
+        assert "0/0 trials passed" in message
+        assert "(no gradable trials: every trial errored)" in message
+
+    def test_skips_errored_trials_but_keeps_original_indices(self) -> None:
+        runs = [_runs(True)[0], _errored_run(), _runs(False)[0]]
+
+        def check(run: EvalRun) -> None:
+            assert_check(run.skill_invoked, "miss")
+
+        outcomes = trial_outcomes(runs, check)
+        message = trial_outcomes_verbose_message(
+            runs, outcomes, check, TARGET, "demo::check"
+        )
+        assert "trial 0: passed" in message
+        assert "trial 2: miss" in message
+        assert "trial 1:" not in message
+
+    def test_passing_trial_without_handler_sections_shows_reply_and_tools(
+        self,
+    ) -> None:
+        runs = [
+            EvalRun(
+                eval_id="t",
+                prompt="",
+                skill_invoked=True,
+                assistant_text="hello",
+                tool_uses=[{"name": "Read"}],
+            ),
+        ]
+
+        def check(run: EvalRun) -> None:
+            return None
+
+        outcomes = trial_outcomes(runs, check)
+        message = trial_outcomes_verbose_message(
+            runs, outcomes, check, TARGET, "demo::check"
+        )
+        assert "Assistant reply:" in message
+        assert "Tool uses:" in message
+
+    def test_passing_trial_without_tool_uses_omits_tool_section(self) -> None:
+        runs = [
+            EvalRun(
+                eval_id="t",
+                prompt="",
+                skill_invoked=True,
+                assistant_text="hello",
+            ),
+        ]
+
+        def check(run: EvalRun) -> None:
+            return None
+
+        outcomes = trial_outcomes(runs, check)
+        message = trial_outcomes_verbose_message(
+            runs, outcomes, check, TARGET, "demo::check"
+        )
+        assert "Assistant reply:" in message
+        assert "Tool uses:" not in message
+
+    def test_truncates_long_section_bodies(self) -> None:
+        runs = _runs(True)
+
+        def check(run: EvalRun) -> None:
+            assert_check(True, "nope", sections=(("Body", "x" * 2000),))
+
+        outcomes = trial_outcomes(runs, check)
+        message = trial_outcomes_verbose_message(
+            runs, outcomes, check, TARGET, "demo::check", max_chars=10
+        )
+        assert "chars truncated" in message
+
+
+class TestAssertCheck:
+    def test_evaluate_check_returns_handler_sections_on_pass(self) -> None:
+        run = EvalRun(
+            eval_id="t",
+            prompt="",
+            skill_invoked=True,
+            assistant_text="before and after",
+        )
+
+        def check(r: EvalRun) -> None:
+            assert_check(
+                True,
+                "nope",
+                sections=(
+                    ("Input", "before"),
+                    ("Output", r.assistant_text),
+                ),
+            )
+
+        passed, detail = evaluate_check(run, check)
+        assert passed is True
+        assert detail.summary == "passed"
+        assert detail.sections == (
+            ("Input", "before"),
+            ("Output", "before and after"),
+        )
 
 
 class TestFailingAssertions:

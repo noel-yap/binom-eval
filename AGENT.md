@@ -23,7 +23,8 @@ pytest path/to/evals -m live_eval \
     --live-eval-model claude:claude-sonnet-4-6 \
     --live-eval-failure-max-chars 10000 \
     --live-eval-pass-threshold 0.95 \
-    --live-eval-show-posterior
+    --live-eval-show-posterior \
+    --live-eval-verbose
 ```
 
 `--live-eval-model` is required for live evals and selects the backend and
@@ -40,6 +41,9 @@ output (default 2000; zero or negative disables truncation).
 the FAIL edge follows as its complement). `--live-eval-show-posterior`
 prints `P(θ ≥ θ₀ | k, n)` and `max θ₀ (pass@τ | k, n)` for each passing
 check, for calibrating the target rate and pass threshold.
+`--live-eval-verbose` goes further: for each passing check it prints full
+per-trial detail -- the posterior summary plus every trial's sections
+(assistant reply, tool uses, or the handler's `assert_check` sections).
 
 ## Architecture
 
