@@ -26,7 +26,7 @@ class EvalRun:
     tool_uses: list[dict[str, Any]] = field(default_factory=list)
     model: str = ""
     prompt_input: str = ""
-    # A trial that could not produce a gradeable transcript (CLI died, API
+    # A trial that could not produce a gradable transcript (CLI died, API
     # error surfaced as an `is_error` result, retries exhausted). Errored
     # trials are excluded from the Beta-binomial counts -- an infrastructure
     # failure says nothing about the skill's true pass rate -- rather than

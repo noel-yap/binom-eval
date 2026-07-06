@@ -163,7 +163,7 @@ def _run_error(
 
 
 def _errored_run(prompt: str, error: str) -> EvalRun:
-    """An `EvalRun` marking a trial that produced no gradeable result."""
+    """An `EvalRun` marking a trial that produced no gradable result."""
     return EvalRun(
         eval_id="",
         prompt=prompt,

@@ -37,6 +37,7 @@ import json
 import math
 import threading
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -74,7 +75,9 @@ class AssertionFailure(AssertionError):
     ``summary`` is one line for rollups; ``sections`` are skill-defined
     ``(label, body)`` pairs the framework renders without interpreting.
     Every assertion handler should raise this (with or without ``sections``)
-    rather than plain ``AssertionError``.
+    rather than plain ``AssertionError``. Prefer ``assert_check`` so the
+    same ``sections`` appear in ``--live-eval-verbose`` output when a trial
+    passes.
     """
 
     summary: str
@@ -93,6 +96,53 @@ class TrialFailure:
 
     summary: str
     sections: tuple[tuple[str, str], ...] = ()
+
+
+_assertion_sections: ContextVar[tuple[tuple[str, str], ...]] = ContextVar(
+    "_assertion_sections", default=()
+)
+
+
+def assert_check(
+    ok: bool,
+    summary: str,
+    *,
+    sections: tuple[tuple[str, str], ...] = (),
+) -> None:
+    """Finish an assertion handler, raising ``AssertionFailure`` on failure.
+
+    Attach the same ``sections`` you would show on failure so
+    ``--live-eval-verbose`` can render them for passing trials too.
+    """
+    _assertion_sections.set(sections)
+    if not ok:
+        raise AssertionFailure(summary, sections)
+
+
+def _default_pass_sections(run: EvalRun) -> tuple[tuple[str, str], ...]:
+    sections: list[tuple[str, str]] = [
+        ("Assistant reply", run.assistant_text or "(empty)")
+    ]
+    if run.tool_uses:
+        sections.append(("Tool uses", str(run.tool_uses)))
+    return tuple(sections)
+
+
+def evaluate_check(
+    run: EvalRun, check: Callable[[EvalRun], None]
+) -> tuple[bool, TrialFailure]:
+    """Run ``check`` once and return ``(passed, detail)`` for verbose output."""
+    token = _assertion_sections.set(())
+    try:
+        check(run)
+        sections = _assertion_sections.get()
+        if not sections:
+            sections = _default_pass_sections(run)
+        return True, TrialFailure("passed", sections)
+    except AssertionFailure as exc:
+        return False, _capture_trial_failure(exc)
+    finally:
+        _assertion_sections.reset(token)
 
 
 class Verdict(enum.Enum):
@@ -266,11 +316,8 @@ def graded_runs(runs: list[EvalRun]) -> list[EvalRun]:
 
 def _trigger_check(run: EvalRun) -> None:
     """Assertion-style check that the skill fired (for should_trigger evals)."""
-    if not run.skill_invoked:
-        raise AssertionFailure(
-            "skill was not invoked",
-            sections=(("Assistant reply", run.assistant_text or "(empty)"),),
-        )
+    sections = (("Assistant reply", run.assistant_text or "(empty)"),)
+    assert_check(run.skill_invoked, "skill was not invoked", sections=sections)
 
 
 def _no_other_skill_check(skill_name: str) -> Callable[[EvalRun], None]:
@@ -296,11 +343,15 @@ def _no_other_skill_check(skill_name: str) -> Callable[[EvalRun], None]:
                 if "SKILL.md" in parts and f"/{skill_name}/SKILL.md" not in raw:
                     idx = parts.index("SKILL.md")
                     other.append(parts[idx - 1] if idx > 0 else raw)
-        if other:
-            raise AssertionFailure(
-                f"unexpected skill(s) invoked: {', '.join(other)}",
-                sections=(("Tool uses", str(run.tool_uses)),),
-            )
+        if run.tool_uses:
+            sections = (("Tool uses", str(run.tool_uses)),)
+        else:
+            sections = (("Assistant reply", run.assistant_text or "(empty)"),)
+        assert_check(
+            not other,
+            f"unexpected skill(s) invoked: {', '.join(other)}",
+            sections=sections,
+        )
     return check
 
 
@@ -561,7 +612,7 @@ def load_evals(
         handlers: when given, every assertion id across the loaded evals must
             have a registered handler; otherwise a single `KeyError` names all
             the gaps. This catches a misconfigured suite at load time so
-            downstream grading never meets an ungradeable assertion.
+            downstream grading never meets an ungradable assertion.
 
     Returns:
         The value of the file's top-level `"evals"` array, with prompts expanded.
@@ -598,10 +649,28 @@ def _format_trial_failure(
     return "\n".join(lines)
 
 
+def _verbose_trials_detail(
+    runs: list[EvalRun],
+    outcomes: list[tuple[int, TrialFailure | None]],
+    check: Callable[[EvalRun], None],
+    max_chars: int,
+) -> str:
+    """Render every gradable trial, pass or fail, one block per trial."""
+    lines: list[str] = []
+    for idx, err in outcomes:
+        detail = err
+        if detail is None:
+            _, detail = evaluate_check(runs[idx], check)
+        lines.append(_format_trial_failure(idx, detail, max_chars))
+    if not lines:
+        return "  (no gradable trials: every trial errored)"
+    return "\n".join(lines)
+
+
 def trial_outcomes(
     runs: list[EvalRun], check: Callable[[EvalRun], None]
 ) -> list[tuple[int, TrialFailure | None]]:
-    """Run `check` against each gradeable trial run, capturing its result.
+    """Run `check` against each gradable trial run, capturing its result.
 
     `check` is an assertion handler that raises ``AssertionFailure`` on
     failure. Returns one ``(trial_index, failure_or_None)`` per graded run,
@@ -667,6 +736,55 @@ def trial_outcomes_posterior_summary(
     )
 
 
+def trial_outcomes_verbose_message(
+    runs: list[EvalRun],
+    outcomes: list[tuple[int, TrialFailure | None]],
+    check: Callable[[EvalRun], None],
+    target: float,
+    label: str,
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
+    max_chars: int = FAILURE_SECTION_MAX_CHARS,
+) -> str:
+    """Human-readable pass detail for ``trial_outcomes_passed``.
+
+    Renders every gradable trial with the same section layout as
+    ``trial_outcomes_failure_message``. Passing trials reuse the handler's
+    ``assert_check`` sections; failing trials reuse the captured failure detail.
+    """
+    passes = sum(1 for _, err in outcomes if err is None)
+    trials = len(outcomes)
+    return (
+        format_posterior_summary(
+            label, passes, trials, target, pass_threshold=pass_threshold
+        )
+        + "\nTrials:\n"
+        + _verbose_trials_detail(runs, outcomes, check, max_chars)
+    )
+
+
+def graded_runs_verbose_message(
+    runs: list[EvalRun],
+    label: str,
+    passes: int,
+    trials: int,
+    target: float,
+    check: Callable[[EvalRun], None],
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
+    max_chars: int = FAILURE_SECTION_MAX_CHARS,
+) -> str:
+    """Verbose trial listing for count-based rollups (e.g. trigger checks)."""
+    outcomes = trial_outcomes(runs, check)
+    return (
+        format_posterior_summary(
+            label, passes, trials, target, pass_threshold=pass_threshold
+        )
+        + "\nTrials:\n"
+        + _verbose_trials_detail(runs, outcomes, check, max_chars)
+    )
+
+
 def trial_outcomes_failure_message(
     outcomes: list[tuple[int, TrialFailure | None]],
     target: float,
@@ -691,7 +809,7 @@ def trial_outcomes_failure_message(
         if err is not None
     )
     if not trials:
-        detail = "  (no gradeable trials: every trial errored)"
+        detail = "  (no gradable trials: every trial errored)"
     return (
         format_posterior_summary(label, passes, trials, target)
         + " (need >= 0.5).\nFailing trials:\n"

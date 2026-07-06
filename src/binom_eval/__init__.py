@@ -22,10 +22,11 @@ only as many trials as the verdict needs. The package is split by concern:
     `run_eval_adaptive`), and the rollups used to grade a batch.
   * `plugin` -- the pytest options, the `live_eval` marker,
     `live_eval_target_rate`, `live_eval_pass_threshold`,
-    `live_eval_failure_max_chars`, `live_eval_show_posterior`, and
-    `make_eval_runs_fixture`. Registered as a
-    pytest plugin (entry point `pytest11`), so installing the package wires
-    up the `--live-eval-*` options and the `live_eval` marker automatically.
+    `live_eval_failure_max_chars`, `live_eval_verbose`,
+    `live_eval_show_posterior`, and `make_eval_runs_fixture`. Registered as
+    a pytest plugin (entry point `pytest11`), so installing the package
+    wires up the `--live-eval-*` options and the `live_eval` marker
+    automatically.
 
 This `__init__` re-exports the public surface, so consumers import
 `from binom_eval import ...`. A per-eval-suite `conftest.py` binds
@@ -55,13 +56,16 @@ from binom_eval.grading import (
     _eval_checks,
     _no_other_skill_check,
     _trigger_check,
+    assert_check,
     assert_handler_coverage,
     eval_passed,
+    evaluate_check,
     expand_eval_item,
     expand_evals,
     failing_assertions,
     format_posterior_summary,
     graded_runs,
+    graded_runs_verbose_message,
     load_evals,
     max_target_at_pass_threshold,
     next_batch_size,
@@ -71,6 +75,7 @@ from binom_eval.grading import (
     trial_outcomes_failure_message,
     trial_outcomes_passed,
     trial_outcomes_posterior_summary,
+    trial_outcomes_verbose_message,
     trigger_pass_counts,
 )
 from binom_eval.plugin import (
@@ -78,9 +83,11 @@ from binom_eval.plugin import (
     DEFAULT_MAX_TRIALS,
     DEFAULT_TARGET_RATE,
     live_eval_failure_max_chars,
+    live_eval_pass_output_enabled,
     live_eval_pass_threshold,
     live_eval_show_posterior,
     live_eval_target_rate,
+    live_eval_verbose,
     make_eval_runs_fixture,
     pytest_addoption,
     pytest_configure,
@@ -182,13 +189,16 @@ __all__ = [
     "PASS_THRESHOLD",
     "PRIOR_ALPHA",
     "PRIOR_BETA",
+    "assert_check",
     "assert_handler_coverage",
     "eval_passed",
+    "evaluate_check",
     "expand_eval_item",
     "expand_evals",
     "failing_assertions",
     "format_posterior_summary",
     "graded_runs",
+    "graded_runs_verbose_message",
     "load_evals",
     "max_target_at_pass_threshold",
     "next_batch_size",
@@ -198,15 +208,18 @@ __all__ = [
     "trial_outcomes_failure_message",
     "trial_outcomes_passed",
     "trial_outcomes_posterior_summary",
+    "trial_outcomes_verbose_message",
     "trigger_pass_counts",
     # plugin
     "DEFAULT_CONCURRENCY",
     "DEFAULT_MAX_TRIALS",
     "DEFAULT_TARGET_RATE",
     "live_eval_failure_max_chars",
+    "live_eval_pass_output_enabled",
     "live_eval_pass_threshold",
     "live_eval_show_posterior",
     "live_eval_target_rate",
+    "live_eval_verbose",
     "make_eval_runs_fixture",
     "pytest_addoption",
     "pytest_configure",

@@ -10,11 +10,14 @@ from binom_eval import (
     AssertionFailure,
     EvalRun,
     PASS_THRESHOLD,
+    assert_check,
     bind_eval_runs_fixture,
     register_live_eval_tests,
+    trial_outcomes,
 )
+from binom_eval.grading import _trigger_check
 from binom_eval.plugin import LIVE_EVAL_POSTERIOR_PROPERTY
-from binom_eval.suite import _record_count_posteriors
+from binom_eval.suite import _pass_summary, _record_count_posteriors
 
 
 def test_bind_eval_runs_fixture_delegates_to_make_eval_runs_fixture(
@@ -185,7 +188,11 @@ def test_record_count_posteriors_attaches_one_summary_per_count() -> None:
     request = _StubRequest()
 
     _record_count_posteriors(
-        request, [("e1", 3, 3), ("e2", 2, 3)], 2.0 / 3.0, PASS_THRESHOLD
+        request,
+        {},
+        [("e1", 3, 3), ("e2", 2, 3)],
+        2.0 / 3.0,
+        PASS_THRESHOLD,
     )
 
     labels = [value for _, value in request.node.user_properties]
@@ -196,15 +203,143 @@ def test_record_count_posteriors_attaches_one_summary_per_count() -> None:
     assert labels[1].startswith("e2: 2/3 trials passed;")
 
 
+def test_record_count_posteriors_verbose_includes_trial_detail() -> None:
+    request = _StubRequest()
+    runs = {
+        "positive": [
+            EvalRun(
+                eval_id="positive",
+                prompt="go",
+                skill_invoked=True,
+                assistant_text="hello",
+            )
+        ]
+    }
+
+    _record_count_posteriors(
+        request,
+        runs,
+        [("positive", 1, 1)],
+        2.0 / 3.0,
+        PASS_THRESHOLD,
+        verbose=True,
+        max_chars=2000,
+        check=_trigger_check,
+    )
+
+    _, summary = request.node.user_properties[0]
+    assert "Trials:" in summary
+    assert "trial 0: passed" in summary
+    assert "Assistant reply:" in summary
+    assert "hello" in summary
+
+
 def test_record_count_posteriors_with_no_counts_records_nothing() -> None:
     request = _StubRequest()
 
-    _record_count_posteriors(request, [], 2.0 / 3.0, PASS_THRESHOLD)
+    _record_count_posteriors(request, {}, [], 2.0 / 3.0, PASS_THRESHOLD)
 
     assert request.node.user_properties == []
 
 
-def test_assertion_test_records_posterior_when_enabled(
+def test_pass_summary_verbose_returns_full_trial_detail() -> None:
+    runs = [
+        EvalRun(
+            eval_id="e",
+            prompt="go",
+            skill_invoked=True,
+            assistant_text="ok",
+        )
+    ]
+
+    def check(run: EvalRun) -> None:
+        assert_check(run.skill_invoked, "miss")
+
+    outcomes = trial_outcomes(runs, check)
+
+    summary = _pass_summary(
+        runs,
+        outcomes,
+        check,
+        2.0 / 3.0,
+        "e::check",
+        pass_threshold=PASS_THRESHOLD,
+        max_chars=2000,
+        verbose=True,
+    )
+
+    assert "Trials:" in summary
+    assert "trial 0: passed" in summary
+
+
+def test_pass_summary_not_verbose_returns_one_line_posterior_summary() -> None:
+    runs = [
+        EvalRun(
+            eval_id="e",
+            prompt="go",
+            skill_invoked=True,
+            assistant_text="ok",
+        )
+    ]
+
+    def check(run: EvalRun) -> None:
+        assert_check(run.skill_invoked, "miss")
+
+    outcomes = trial_outcomes(runs, check)
+
+    summary = _pass_summary(
+        runs,
+        outcomes,
+        check,
+        2.0 / 3.0,
+        "e::check",
+        pass_threshold=PASS_THRESHOLD,
+        max_chars=2000,
+        verbose=False,
+    )
+
+    assert summary.startswith("e::check: 1/1 trials passed;")
+    assert "Trials:" not in summary
+
+
+def test_assertion_test_records_verbose_detail_when_enabled(
+    tmp_path: Path,
+) -> None:
+    def _checks_out(run: EvalRun) -> None:
+        sections = (
+            ("Input", run.prompt),
+            ("Output", run.assistant_text),
+        )
+        assert_check(True, "missing ok", sections=sections)
+
+    namespace = _demo_namespace(tmp_path, {"checks-out": _checks_out})
+    request = _StubRequest()
+
+    namespace["test_eval_assertion"](
+        eval_runs=_passing_runs(),
+        live_eval_target_rate=2.0 / 3.0,
+        live_eval_pass_threshold=PASS_THRESHOLD,
+        live_eval_failure_max_chars=2000,
+        live_eval_verbose=True,
+        live_eval_show_posterior=False,
+        request=request,
+        eval_id="positive",
+        assertion_id="checks-out",
+    )
+
+    assert len(request.node.user_properties) == 1
+    name, summary = request.node.user_properties[0]
+    assert name == LIVE_EVAL_POSTERIOR_PROPERTY
+    assert summary.startswith("positive::checks-out: 3/3 trials passed;")
+    assert "Trials:" in summary
+    assert "trial 0: passed" in summary
+    assert "Input:" in summary
+    assert "Output:" in summary
+    assert "go" in summary
+    assert "ok" in summary
+
+
+def test_assertion_test_records_posterior_only_when_show_posterior_enabled(
     tmp_path: Path,
 ) -> None:
     namespace = _demo_namespace(tmp_path, {"checks-out": lambda r: None})
@@ -215,6 +350,7 @@ def test_assertion_test_records_posterior_when_enabled(
         live_eval_target_rate=2.0 / 3.0,
         live_eval_pass_threshold=PASS_THRESHOLD,
         live_eval_failure_max_chars=2000,
+        live_eval_verbose=False,
         live_eval_show_posterior=True,
         request=request,
         eval_id="positive",
@@ -222,9 +358,9 @@ def test_assertion_test_records_posterior_when_enabled(
     )
 
     assert len(request.node.user_properties) == 1
-    name, summary = request.node.user_properties[0]
-    assert name == LIVE_EVAL_POSTERIOR_PROPERTY
+    _, summary = request.node.user_properties[0]
     assert summary.startswith("positive::checks-out: 3/3 trials passed;")
+    assert "Trials:" not in summary
 
 
 def test_assertion_test_records_nothing_when_disabled(
@@ -238,6 +374,7 @@ def test_assertion_test_records_nothing_when_disabled(
         live_eval_target_rate=2.0 / 3.0,
         live_eval_pass_threshold=PASS_THRESHOLD,
         live_eval_failure_max_chars=2000,
+        live_eval_verbose=False,
         live_eval_show_posterior=False,
         request=request,
         eval_id="positive",
@@ -262,7 +399,8 @@ def test_assertion_test_records_nothing_when_failing(
             live_eval_target_rate=2.0 / 3.0,
             live_eval_pass_threshold=PASS_THRESHOLD,
             live_eval_failure_max_chars=2000,
-            live_eval_show_posterior=True,
+            live_eval_verbose=True,
+            live_eval_show_posterior=False,
             request=request,
             eval_id="positive",
             assertion_id="checks-out",
@@ -281,7 +419,9 @@ def test_expectation_test_records_posterior_per_assertion(
         eval_runs=_passing_runs(),
         live_eval_target_rate=2.0 / 3.0,
         live_eval_pass_threshold=PASS_THRESHOLD,
-        live_eval_show_posterior=True,
+        live_eval_failure_max_chars=2000,
+        live_eval_verbose=True,
+        live_eval_show_posterior=False,
         request=request,
         eval_id="positive",
     )
@@ -289,6 +429,7 @@ def test_expectation_test_records_posterior_per_assertion(
     assert len(request.node.user_properties) == 1
     _, summary = request.node.user_properties[0]
     assert summary.startswith("positive::checks-out: 3/3 trials passed;")
+    assert "Trials:" in summary
 
 
 def test_trigger_test_records_posterior_per_eval(
@@ -301,10 +442,15 @@ def test_trigger_test_records_posterior_per_eval(
         eval_runs=_passing_runs(),
         live_eval_target_rate=2.0 / 3.0,
         live_eval_pass_threshold=PASS_THRESHOLD,
-        live_eval_show_posterior=True,
+        live_eval_failure_max_chars=2000,
+        live_eval_verbose=True,
+        live_eval_show_posterior=False,
         request=request,
     )
 
     assert len(request.node.user_properties) == 1
     _, summary = request.node.user_properties[0]
     assert summary.startswith("positive: 3/3 trials passed;")
+    assert "Trials:" in summary
+    assert "trial 0: passed" in summary
+    assert "Assistant reply:" in summary

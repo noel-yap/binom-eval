@@ -123,7 +123,8 @@ uv add "binom-eval @ git+https://github.com/noel-yap/binom-eval"
 Installing registers a pytest plugin, so the `--live-eval-max-trials`,
 `--live-eval-target-rate`, `--live-eval-pass-threshold`,
 `--live-eval-concurrency`, `--live-eval-isolate`, `--live-eval-model`,
-`--live-eval-failure-max-chars`, and `--live-eval-show-posterior`
+`--live-eval-failure-max-chars`, `--live-eval-show-posterior`, and
+`--live-eval-verbose`
 options and the
 `live_eval` marker become available to your test suite with no extra wiring. Live evals require the `claude` CLI on
 `PATH`; when it's absent the fixture skips rather than fails.
@@ -184,6 +185,11 @@ pytest path/to/evals -m live_eval \
     --live-eval-pass-threshold 0.95
 # also print P(θ ≥ θ₀ | k, n) and max θ₀ (pass@τ | k, n) for each passing check:
 pytest path/to/evals -m live_eval --live-eval-show-posterior
+# print full grading detail for every trial of each passing check too --
+# the posterior summary plus each trial's sections (assistant reply, tool
+# uses, or the handler's assert_check sections), in the same layout as
+# failure output; respects --live-eval-failure-max-chars:
+pytest path/to/evals -m live_eval --live-eval-verbose
 # run more trials at once; isolate runs for a skill that writes to the tree:
 pytest path/to/evals -m live_eval \
     --live-eval-concurrency 8 --live-eval-isolate

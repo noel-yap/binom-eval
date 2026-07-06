@@ -51,6 +51,7 @@ class TestPytestAddOption:
         assert "--live-eval-pass-threshold" in options
         assert "--live-eval-model" in options
         assert "--live-eval-failure-max-chars" in options
+        assert "--live-eval-verbose" in options
         assert "--live-eval-show-posterior" in options
 
     def test_max_trials_defaults_to_constant_and_is_int(self) -> None:
@@ -72,6 +73,11 @@ class TestPytestAddOption:
         opt = self._options()["--live-eval-failure-max-chars"]
         assert opt["default"] == FAILURE_SECTION_MAX_CHARS
         assert opt["type"] is int
+
+    def test_verbose_defaults_to_false(self) -> None:
+        opt = self._options()["--live-eval-verbose"]
+        assert opt["default"] is False
+        assert opt["action"] == "store_true"
 
     def test_show_posterior_defaults_to_false(self) -> None:
         opt = self._options()["--live-eval-show-posterior"]
@@ -397,7 +403,7 @@ class TestPosteriorReporting:
     def test_runtest_logreport_prints_posterior_on_pass(self) -> None:
         terminal = _StubTerminalReporter()
         reporter = plugin._SessionReporter(
-            _StubReporterConfig(terminal), show_posterior=True
+            _StubReporterConfig(terminal), verbose=True
         )
         summary = "demo: P(θ ≥ 0.600 | k=3, n=3) = 0.800"
         report = _StubReport([(LIVE_EVAL_POSTERIOR_PROPERTY, summary)])
@@ -409,7 +415,7 @@ class TestPosteriorReporting:
     def test_runtest_logreport_skips_when_disabled(self) -> None:
         terminal = _StubTerminalReporter()
         reporter = plugin._SessionReporter(
-            _StubReporterConfig(terminal), show_posterior=False
+            _StubReporterConfig(terminal), verbose=False
         )
         report = _StubReport([(LIVE_EVAL_POSTERIOR_PROPERTY, "hidden")])
 
@@ -420,7 +426,7 @@ class TestPosteriorReporting:
     def test_runtest_logreport_skips_setup_phase(self) -> None:
         terminal = _StubTerminalReporter()
         reporter = plugin._SessionReporter(
-            _StubReporterConfig(terminal), show_posterior=True
+            _StubReporterConfig(terminal), verbose=True
         )
         report = _StubReport(
             [(LIVE_EVAL_POSTERIOR_PROPERTY, "early")], when="setup"
@@ -433,7 +439,7 @@ class TestPosteriorReporting:
     def test_runtest_logreport_skips_failed_test(self) -> None:
         terminal = _StubTerminalReporter()
         reporter = plugin._SessionReporter(
-            _StubReporterConfig(terminal), show_posterior=True
+            _StubReporterConfig(terminal), verbose=True
         )
         report = _StubReport(
             [(LIVE_EVAL_POSTERIOR_PROPERTY, "nope")], passed=False
@@ -448,7 +454,7 @@ class TestPosteriorReporting:
     ) -> None:
         terminal = _StubTerminalReporter()
         reporter = plugin._SessionReporter(
-            _StubReporterConfig(terminal), show_posterior=True
+            _StubReporterConfig(terminal), verbose=True
         )
         report = _StubReport([("some_other_property", "x")])
 
@@ -458,10 +464,31 @@ class TestPosteriorReporting:
 
     def test_runtest_logreport_tolerates_missing_terminal(self) -> None:
         reporter = plugin._SessionReporter(
-            _StubReporterConfig(None), show_posterior=True
+            _StubReporterConfig(None), verbose=True
         )
         report = _StubReport(
             [(LIVE_EVAL_POSTERIOR_PROPERTY, "orphan")]
         )
 
         reporter.pytest_runtest_logreport(report)  # must not raise
+
+
+class TestLiveEvalPassOutputEnabled:
+    class _StubConfig:
+        def __init__(self, **flags: bool) -> None:
+            self._flags = flags
+
+        def getoption(self, name: str) -> bool:
+            return self._flags.get(name, False)
+
+    def test_disabled_by_default(self) -> None:
+        config = self._StubConfig()
+        assert plugin.live_eval_pass_output_enabled(config) is False
+
+    def test_verbose_enables_output(self) -> None:
+        config = self._StubConfig(**{"--live-eval-verbose": True})
+        assert plugin.live_eval_pass_output_enabled(config) is True
+
+    def test_show_posterior_enables_output(self) -> None:
+        config = self._StubConfig(**{"--live-eval-show-posterior": True})
+        assert plugin.live_eval_pass_output_enabled(config) is True
