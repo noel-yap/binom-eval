@@ -387,7 +387,7 @@ class TestPosteriorReporting:
             def __init__(self) -> None:
                 self.user_properties: list[tuple[str, str]] = []
 
-        summary = "demo::check: P(rate >= 0.600 | k=3, n=3) = 0.800"
+        summary = "demo::check: P(θ ≥ 0.600 | k=3, n=3) = 0.800"
         node = _Node()
         record_live_eval_posterior(node, summary)
         assert node.user_properties == [
@@ -399,7 +399,7 @@ class TestPosteriorReporting:
         reporter = plugin._SessionReporter(
             _StubReporterConfig(terminal), show_posterior=True
         )
-        summary = "demo: P(rate >= 0.600 | k=3, n=3) = 0.800"
+        summary = "demo: P(θ ≥ 0.600 | k=3, n=3) = 0.800"
         report = _StubReport([(LIVE_EVAL_POSTERIOR_PROPERTY, summary)])
 
         reporter.pytest_runtest_logreport(report)

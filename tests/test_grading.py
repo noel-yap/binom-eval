@@ -41,6 +41,7 @@ from binom_eval import (
     failing_assertions,
     graded_runs,
     load_evals,
+    max_target_at_pass_threshold,
     next_batch_size,
     posterior_pass_prob,
     trial_outcomes,
@@ -92,15 +93,15 @@ class TestBetainc:
         assert _betainc(1.5, 2.0, 3.0) == 1.0
 
     def test_matches_closed_form_for_small_beta(self) -> None:
-        # For Beta(1, b), P(theta <= x) = 1 - (1 - x)**b.
+        # For Beta(1, b), P(θ ≤ x) = 1 - (1 - x)**b.
         assert _betainc(0.5, 1.0, 3.0) == pytest.approx(1 - 0.5**3, abs=1e-9)
 
 
 class TestPosteriorPassProb:
-    """p_good = P(theta >= target) under the Beta(1,1) posterior."""
+    """p_good = P(θ ≥ target) under the Beta(1,1) posterior."""
 
     def test_no_trials_is_prior_mass_above_target(self) -> None:
-        # Beta(1, 1): P(theta >= t) = 1 - t.
+        # Beta(1, 1): P(θ ≥ t) = 1 - t.
         assert posterior_pass_prob(0, 0, TARGET) == pytest.approx(
             1 - TARGET, abs=1e-9
         )
@@ -277,7 +278,7 @@ class TestTrialOutcomesGrading:
     def test_failure_message_reports_p_good(self) -> None:
         outcomes = [(0, TrialFailure("bad")), (1, TrialFailure("bad"))]
         with pytest.raises(
-            AssertionError, match=r"P\(rate >= 0\.667 \| k=0, n=2\)"
+            AssertionError, match=r"P\(θ ≥ 0\.667 \| k=0, n=2\)"
         ):
             assert trial_outcomes_passed(outcomes, TARGET), (
                 trial_outcomes_failure_message(outcomes, TARGET, "x")
@@ -290,12 +291,14 @@ class TestTrialOutcomesGrading:
         )
         assert summary.startswith(
             "demo::check: 3/3 trials passed; "
-            "P(rate >= 0.667 | k=3, n=3) = "
+            "P(θ ≥ 0.667 | k=3, n=3) = "
         )
-        p_good = float(summary.rsplit("= ", 1)[-1])
+        p_part = summary.split("; ", maxsplit=1)[1]
+        p_good = float(p_part.split("; ", maxsplit=1)[0].rsplit("= ", 1)[-1])
         assert p_good == pytest.approx(
             posterior_pass_prob(3, 3, TARGET), abs=1e-3
         )
+        assert "max θ₀ (pass@τ=" in summary
 
     def test_posterior_summary_counts_only_clean_trials(self) -> None:
         outcomes = [
@@ -308,14 +311,33 @@ class TestTrialOutcomesGrading:
         )
         assert summary.startswith(
             "demo::check: 2/3 trials passed; "
-            "P(rate >= 0.667 | k=2, n=3) = "
+            "P(θ ≥ 0.667 | k=2, n=3) = "
         )
 
     def test_posterior_summary_handles_no_trials(self) -> None:
         summary = trial_outcomes_posterior_summary([], TARGET, "empty")
         assert summary.startswith(
-            "empty: 0/0 trials passed; P(rate >= 0.667 | k=0, n=0) = "
+            "empty: 0/0 trials passed; P(θ ≥ 0.667 | k=0, n=0) = "
         )
+        assert "max θ₀ (pass@τ=" in summary
+
+    def test_max_target_at_pass_threshold_matches_verdict_edge(self) -> None:
+        # 6/6 at target 2/3 clears the default PASS edge; max θ₀ should
+        # sit at or above that target.
+        max_target = max_target_at_pass_threshold(6, 6, PASS_THRESHOLD)
+        assert max_target >= TARGET
+        assert (
+            posterior_pass_prob(6, 6, max_target)
+            > PASS_THRESHOLD
+        )
+        assert posterior_pass_prob(6, 6, max_target + 1e-6) <= PASS_THRESHOLD
+
+    def test_max_target_shrinks_with_all_fail_streak(self) -> None:
+        clean = max_target_at_pass_threshold(3, 3, PASS_THRESHOLD)
+        failed = max_target_at_pass_threshold(0, 6, PASS_THRESHOLD)
+        assert clean > failed
+        assert posterior_pass_prob(0, 6, failed) > PASS_THRESHOLD
+        assert posterior_pass_prob(0, 6, failed + 1e-6) <= PASS_THRESHOLD
 
     def test_failure_message_renders_structured_sections(self) -> None:
         outcomes = [
