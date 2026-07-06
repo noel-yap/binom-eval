@@ -231,7 +231,7 @@ consider_namespace_packages = true
 | `run_claude`, `run_claude_batch`, `stripped_env` | The `claude -p` I/O layer. |
 | `EvalRun`, `parse_stream_json` | Stream-json parsing into the shared record. |
 | `agent_invoked`, `skill_invoked_in_tools`, `skill_was_invoked`, `agent_or_skill_invoked`, `tool_invoked` | Inspect `EvalRun` for Agent/Skill delegation (bool predicates for use with `assert`). |
-| `code_blocks`, `contains`, `contains_all`, `has_code_blocks`, `first_line`, `missing_from`, `NAMED_FN_RE`, `ARROW_FN_RE` | Assertion text/regex helpers. |
+| `code_blocks`, `contains`, `contains_all`, `fenced_blocks`, `has_code_blocks`, `first_line`, `missing_from`, `NAMED_FN_RE`, `ARROW_FN_RE` | Assertion text/regex helpers. |
 | `load_evals`, `expand_evals`, `assert_handler_coverage` | Load + expand + validate an `evals.json`. |
 
 ## Requirements
