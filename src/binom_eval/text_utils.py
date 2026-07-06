@@ -14,16 +14,80 @@ from __future__ import annotations
 
 import re
 
-CODE_BLOCK_RE = re.compile(r"```(?:ts|typescript)?\n(.*?)```", re.DOTALL)
 NAMED_FN_RE = re.compile(r"\bfunction\s+(\w+)\s*\(")
 ARROW_FN_RE = re.compile(
     r"\bconst\s+(\w+)\s*(?::[^=]+)?=\s*(?:\([^)]*\)|\w+)\s*(?::[^=]+)?=>"
 )
 
+# A fence line: up to three spaces of indent, ``` and the rest of the line
+# as the info string (CommonMark reads the whole remainder, so multi-word
+# tags like `ts twoslash` and arbitrary tags such as Cursor's
+# `start:end:path.ts` citation fences all open a block). `[^`]*` keeps
+# lines of four or more backticks from matching. A fence line whose info
+# string strips to empty closes the open block; a closing fence never
+# carries an info string.
+_FENCE_RE = re.compile(r"^ {0,3}```([^`]*)$")
+
+# Info strings `code_blocks` treats as TypeScript output.
+_TS_INFOS = frozenset({"", "ts", "typescript"})
+
+
+def fenced_blocks(text: str) -> list[tuple[str, str]]:
+    """Every fenced code block in `text`, as `(info, body)` pairs.
+
+    Fences are parsed line-wise, the way CommonMark treats them: any
+    ``` line opens a block whatever its info string, and the next bare
+    ``` line closes it (a fence-like line carrying an info string inside
+    an open block is body content, since per CommonMark a closing fence
+    has no info string). Parsing line-wise is what keeps unknown tags
+    from desynchronizing extraction -- a regex that recognizes only known
+    language tags as openers skips e.g. a `start:end:path.ts` citation
+    fence (as emitted by Cursor), mistakes that block's closing fence for
+    an opener, and then captures the prose between real blocks instead of
+    the code. An unterminated final block is dropped.
+
+    Args:
+      text: Model output that may contain fenced code blocks.
+
+    Returns:
+      One `(info, body)` pair per closed block, in order of appearance.
+      `info` is the fence's full info string, stripped of surrounding
+      whitespace but otherwise verbatim -- multi-word info strings such
+      as `ts twoslash` are allowed, and a bare fence yields `""`; `body`
+      carries no trailing newline.
+    """
+    blocks: list[tuple[str, str]] = []
+    info: str | None = None
+    body: list[str] = []
+    for line in text.splitlines():
+        fence = _FENCE_RE.match(line)
+        if info is None:
+            if fence:
+                info = fence.group(1).strip()
+                body = []
+        elif fence and not fence.group(1).strip():
+            blocks.append((info, "\n".join(body)))
+            info = None
+        else:
+            body.append(line)
+    return blocks
+
 
 def code_blocks(text: str) -> list[str]:
-    """Extract bodies of fenced ```ts / ```typescript / ``` code blocks."""
-    return CODE_BLOCK_RE.findall(text)
+    """Extract bodies of fenced ```ts / ```typescript / ``` code blocks.
+
+    Classification looks at the info string's first word, so a
+    multi-word tag such as ```ts twoslash still counts as TypeScript.
+    Blocks whose first word is anything else (```json, a citation
+    fence, ...) are skipped -- but skipped *correctly*, so the
+    TypeScript blocks around them are still extracted (see
+    `fenced_blocks`).
+    """
+    return [
+        body
+        for fence_info, body in fenced_blocks(text)
+        if (fence_info.split() or [""])[0].lower() in _TS_INFOS
+    ]
 
 
 def first_line(block: str) -> str:
@@ -67,8 +131,14 @@ def contains_all(haystack: str, needles: tuple[str, ...]) -> bool:
 
 
 def has_code_blocks(text: str) -> bool:
-    """True when ``text`` contains at least one fenced code block."""
-    return bool(code_blocks(text))
+    """True when ``text`` contains at least one closed fenced code block.
+
+    Counts a block with any info string: a response whose only code sits
+    inside a ```json or citation fence still has a code block. Whether
+    the right kind of block is present is the caller's stricter check,
+    via `code_blocks`.
+    """
+    return bool(fenced_blocks(text))
 
 
 def comment_mark_re(phrase: str) -> re.Pattern[str]:

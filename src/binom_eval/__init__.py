@@ -131,12 +131,12 @@ from binom_eval.stream_json import (
 )
 from binom_eval.text_utils import (
     ARROW_FN_RE,
-    CODE_BLOCK_RE,
     NAMED_FN_RE,
     code_blocks,
     comment_mark_re,
     contains,
     contains_all,
+    fenced_blocks,
     first_line,
     has_code_blocks,
     marked_regions,
@@ -146,12 +146,12 @@ from binom_eval.text_utils import (
 __all__ = [
     # text_utils
     "ARROW_FN_RE",
-    "CODE_BLOCK_RE",
     "NAMED_FN_RE",
     "code_blocks",
     "comment_mark_re",
     "contains",
     "contains_all",
+    "fenced_blocks",
     "first_line",
     "has_code_blocks",
     "marked_regions",

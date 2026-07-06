@@ -1,16 +1,19 @@
 """Unit tests for `binom_eval.text_utils` (assertion text helpers).
 
-`code_blocks` and `first_line` are exercised through the per-skill
-`_assertions.py` suites; the skill-independent `missing_from`,
-`comment_mark_re`, and `marked_regions` are tested here.
+`fenced_blocks` and `code_blocks` are covered here, including the
+citation-fence desynchronization regression; `first_line` is exercised
+through the per-skill `_assertions.py` suites, and the skill-independent
+`missing_from`, `comment_mark_re`, and `marked_regions` are tested here.
 """
 
 from __future__ import annotations
 
 from binom_eval import (
+    code_blocks,
     comment_mark_re,
     contains,
     contains_all,
+    fenced_blocks,
     has_code_blocks,
     marked_regions,
     missing_from,
@@ -124,3 +127,83 @@ class TestMarkedRegions:
         assert len(regions) == 2
         assert "first" in regions[0]
         assert "second" in regions[1]
+
+
+_CITATION_THEN_TS = """\
+Cited context:
+
+```12:15:src/app/checkout.ts
+const service = new InvoiceService();
+```
+
+Final contents:
+
+```typescript
+const service = new InvoiceService(new TaxRateClient());
+```
+"""
+
+
+class TestFencedBlocks:
+    def test_returns_info_and_body_pairs(self) -> None:
+        assert fenced_blocks("```ts\nconst x = 1\n```") == [
+            ("ts", "const x = 1")
+        ]
+
+    def test_bare_fence_has_empty_info(self) -> None:
+        assert fenced_blocks("```\nplain\n```") == [("", "plain")]
+
+    def test_citation_fence_does_not_desynchronize(self) -> None:
+        assert fenced_blocks(_CITATION_THEN_TS) == [
+            (
+                "12:15:src/app/checkout.ts",
+                "const service = new InvoiceService();",
+            ),
+            (
+                "typescript",
+                "const service = new InvoiceService(new TaxRateClient());",
+            ),
+        ]
+
+    def test_prose_between_blocks_is_not_captured(self) -> None:
+        blocks = fenced_blocks(_CITATION_THEN_TS)
+        assert "Final contents" not in blocks[0][1]
+        assert "Final contents" not in blocks[1][1]
+
+    def test_unclosed_block_is_dropped(self) -> None:
+        assert fenced_blocks("```ts\nconst x = 1") == []
+
+    def test_multi_word_info_fence_stays_in_sync(self) -> None:
+        text = "```ts twoslash\ncode\n```\n```typescript\nreal\n```"
+        assert fenced_blocks(text) == [
+            ("ts twoslash", "code"),
+            ("typescript", "real"),
+        ]
+
+    def test_four_backtick_line_is_not_a_fence(self) -> None:
+        assert fenced_blocks("````\nx\n````") == []
+
+
+class TestCodeBlocks:
+    def test_extracts_ts_typescript_and_bare_blocks(self) -> None:
+        text = "```ts\na\n```\n```typescript\nb\n```\n```\nc\n```"
+        assert code_blocks(text) == ["a", "b", "c"]
+
+    def test_skips_citation_fences_without_desync(self) -> None:
+        assert code_blocks(_CITATION_THEN_TS) == [
+            "const service = new InvoiceService(new TaxRateClient());"
+        ]
+
+    def test_skips_json_blocks(self) -> None:
+        assert code_blocks('```json\n{"a": 1}\n```') == []
+
+    def test_extracts_block_with_multi_word_ts_info(self) -> None:
+        assert code_blocks("```ts twoslash\ncode\n```") == ["code"]
+
+    def test_skips_block_with_multi_word_non_ts_info(self) -> None:
+        assert code_blocks("```json schema\n{}\n```") == []
+
+
+class TestHasCodeBlocksCountsAnyFence:
+    def test_true_for_citation_fenced_block(self) -> None:
+        assert has_code_blocks("```1:4:src/x.ts\ncode\n```") is True
