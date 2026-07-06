@@ -10,7 +10,7 @@ only as many trials as the verdict needs. The package is split by concern:
 
   * `text_utils` -- pure text/regex helpers for assertion modules
     (code-block extraction, the function-definition regexes, substring
-    checks).
+    checks, decoration-tolerant `// ... <phrase>` comment-marker regions).
   * `stream_json` -- the `EvalRun` dataclass and `parse_stream_json`, which
     turn one `claude -p` run's stdout into an `EvalRun`.
   * `runner` -- the subprocess/env layer: the `Runner` backends
@@ -134,10 +134,12 @@ from binom_eval.text_utils import (
     CODE_BLOCK_RE,
     NAMED_FN_RE,
     code_blocks,
+    comment_mark_re,
     contains,
     contains_all,
     first_line,
     has_code_blocks,
+    marked_regions,
     missing_from,
 )
 
@@ -147,10 +149,12 @@ __all__ = [
     "CODE_BLOCK_RE",
     "NAMED_FN_RE",
     "code_blocks",
+    "comment_mark_re",
     "contains",
     "contains_all",
     "first_line",
     "has_code_blocks",
+    "marked_regions",
     "missing_from",
     # stream_json
     "EvalRun",

@@ -5,6 +5,9 @@ machinery: extracting fenced code blocks from model output, taking a
 capped first line for messages, and substring-presence checks. The
 function-definition regexes (`NAMED_FN_RE`, `ARROW_FN_RE`) are exposed so
 per-skill assertions can find declared functions in refactored TypeScript.
+`comment_mark_re` and `marked_regions` locate decoration-tolerant
+`// ... <phrase> ... // ... end <phrase>` comment markers, for skills that
+ask a model to delimit a region (e.g. a "pure core") with comments.
 """
 
 from __future__ import annotations
@@ -66,3 +69,48 @@ def contains_all(haystack: str, needles: tuple[str, ...]) -> bool:
 def has_code_blocks(text: str) -> bool:
     """True when ``text`` contains at least one fenced code block."""
     return bool(code_blocks(text))
+
+
+def comment_mark_re(phrase: str) -> re.Pattern[str]:
+    """Compile a decoration-tolerant regex for a `// ... <phrase> ...` comment.
+
+    Matches a line comment containing `phrase` (case-insensitive, words
+    separated by whitespace, word-bounded) regardless of decoration such
+    as `// --- pure core ---`. Lines marking the END of a region
+    (`// ... end <phrase>`) are excluded, so the opener regex never
+    matches a closing marker.
+
+    Args:
+      phrase: The words to look for, e.g. "pure core".
+
+    Returns:
+      A compiled, case-insensitive regex matching an opening marker line.
+    """
+    words = r"\s+".join(map(re.escape, phrase.split()))
+    return re.compile(
+        rf"//(?![^\n]*\bend\s+{words}\b)[^\n]*?\b{words}\b",
+        re.IGNORECASE,
+    )
+
+
+def marked_regions(text: str, phrase: str) -> list[str]:
+    """Regions between `// ... <phrase>` and `// ... end <phrase>` comments.
+
+    Each region runs from the line after a decoration-tolerant opening
+    marker (see `comment_mark_re`) to the matching `// ... end <phrase>`
+    closing marker, or to the end of `text` when the close is omitted.
+
+    Args:
+      text: The model output to search.
+      phrase: The words identifying the marked region, e.g. "pure core".
+
+    Returns:
+      The text of each marked region, in the order they appear in `text`.
+    """
+    words = r"\s+".join(map(re.escape, phrase.split()))
+    region_re = re.compile(
+        rf"//(?![^\n]*\bend\s+{words}\b)[^\n]*?\b{words}\b[^\n]*\n"
+        rf"(.*?)(?=//[^\n]*?\bend\s+{words}\b|\Z)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    return region_re.findall(text)
