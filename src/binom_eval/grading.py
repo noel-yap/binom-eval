@@ -2,17 +2,17 @@
 
 Each graded check is a Bernoulli process: on any single `claude -p` run the
 skill-with-prompt either satisfies the assertion (with unknown true pass
-rate ``theta``) or not. We never observe ``theta`` -- only ``k`` passes out
+rate ``θ``) or not. We never observe ``θ`` -- only ``k`` passes out
 of ``n`` trials. So instead of thresholding a raw count we put a posterior
-on ``theta`` and ask how much of it clears a target rate.
+on ``θ`` and ask how much of it clears a target rate.
 
-  * Model: ``k ~ Binomial(n, theta)``, prior ``theta ~ Beta(1, 1)`` (uniform).
+  * Model: ``k ~ Binomial(n, θ)``, prior ``θ ~ Beta(1, 1)`` (uniform).
     Beta is conjugate to the binomial, so the posterior is closed-form:
-    ``theta | (k, n) ~ Beta(1 + k, 1 + (n - k))`` -- each batch of trials
+    ``Θ | (k, n) ~ Beta(1 + k, 1 + (n - k))`` -- each batch of trials
     just bumps the two parameters, no sampling.
   * Bar: ``TARGET_RATE`` (default 3/5) is the true pass rate a good skill
     should clear. ``posterior_pass_prob`` returns
-    ``p_good = P(theta >= TARGET_RATE | k, n)`` via the regularized
+    ``p_good = P(θ ≥ TARGET_RATE | k, n)`` via the regularized
     incomplete beta function (the Beta CDF), stdlib-only.
   * Verdict band: PASS once ``p_good > PASS_THRESHOLD`` (1 - e^-2 ~ 0.865),
     FAIL once ``p_good < FAIL_THRESHOLD`` (e^-2 ~ 0.135); in between the
@@ -44,12 +44,12 @@ from typing import Any
 from binom_eval.runner import Runner, run_claude_batch
 from binom_eval.stream_json import EvalRun
 
-# Beta(1, 1) prior: uniform over theta, i.e. no prior opinion on the rate.
+# Beta(1, 1) prior: uniform over θ, i.e. no prior opinion on the rate.
 PRIOR_ALPHA = 1.0
 PRIOR_BETA = 1.0
 
 # Posterior-mass thresholds for the verdict band, in terms of
-# p_good = P(theta >= TARGET_RATE). PASS above the high edge, FAIL below the
+# p_good = P(θ ≥ TARGET_RATE). PASS above the high edge, FAIL below the
 # low edge, keep sampling in between. The edges are e^-2 and its complement,
 # so the band is symmetric about 1/2 and ~73% wide.
 PASS_THRESHOLD = 1.0 - math.exp(-2)  # ~0.8647
@@ -111,7 +111,7 @@ class Verdict(enum.Enum):
 def _betainc(x: float, a: float, b: float) -> float:
     """Regularized incomplete beta ``I_x(a, b)`` -- the CDF of ``Beta(a, b)``.
 
-    Returns ``P(theta <= x)`` for ``theta ~ Beta(a, b)``. Stdlib-only
+    Returns ``P(θ ≤ x)`` for ``θ ~ Beta(a, b)``. Stdlib-only
     (Lentz's continued fraction; ``math.lgamma`` for the front factor), good
     to ~1e-12 over the range this module uses.
     """
@@ -179,7 +179,7 @@ def _betainc(x: float, a: float, b: float) -> float:
 
 
 def posterior_pass_prob(passes: int, trials: int, target: float) -> float:
-    """``p_good = P(theta >= target)`` under the Beta-binomial posterior.
+    """``p_good = P(θ ≥ target)`` under the Beta-binomial posterior.
 
     With a ``Beta(PRIOR_ALPHA, PRIOR_BETA)`` prior and ``passes`` of
     ``trials`` successes, the posterior is
@@ -191,6 +191,29 @@ def posterior_pass_prob(passes: int, trials: int, target: float) -> float:
     alpha = PRIOR_ALPHA + passes
     beta = PRIOR_BETA + (trials - passes)
     return 1.0 - _betainc(target, alpha, beta)
+
+
+def max_target_at_pass_threshold(
+    passes: int,
+    trials: int,
+    pass_threshold: float,
+) -> float:
+    """Highest target rate at which the posterior still PASS-locks.
+
+    Returns the largest ``θ₀`` in ``[0, 1]`` with
+    ``P(θ ≥ θ₀ | k, n) > τ`` (matching ``_verdict``'s strict PASS edge at
+    ``τ = pass_threshold``). Returns ``0.0`` when no target clears ``τ``.
+    """
+    if pass_threshold >= 1.0:
+        return 0.0
+    lo, hi = 0.0, 1.0
+    for _ in range(64):
+        mid = (lo + hi) / 2.0
+        if posterior_pass_prob(passes, trials, mid) > pass_threshold:
+            lo = mid
+        else:
+            hi = mid
+    return lo
 
 
 def _verdict(
@@ -611,17 +634,22 @@ def format_posterior_summary(
     passes: int,
     trials: int,
     target: float,
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
 ) -> str:
-    """One-line summary of ``P(rate >= p0 | k, n)`` for pytest output.
+    """One-line posterior calibration summary for pytest output.
 
-    ``p0`` is the target pass rate, ``k`` the pass count, ``n`` the trial
-    count. Returns ``p_good = P(rate >= p0 | k, n)`` under the Beta(1, 1)
-    posterior.
+    Reports ``P(θ ≥ θ₀ | k, n)`` at the configured target ``θ₀``, and the
+    highest target ``max θ₀`` that still PASS-locks at ``τ = pass_threshold``
+    given the same ``k`` and ``n``.
     """
     p_good = posterior_pass_prob(passes, trials, target)
+    max_target = max_target_at_pass_threshold(passes, trials, pass_threshold)
     return (
         f"{label}: {passes}/{trials} trials passed; "
-        f"P(rate >= {target:.3f} | k={passes}, n={trials}) = {p_good:.3f}"
+        f"P(θ ≥ {target:.3f} | k={passes}, n={trials}) = {p_good:.3f}; "
+        f"max θ₀ (pass@τ={pass_threshold:.3f} | k={passes}, n={trials}) = "
+        f"{max_target:.3f}"
     )
 
 
@@ -629,10 +657,14 @@ def trial_outcomes_posterior_summary(
     outcomes: list[tuple[int, TrialFailure | None]],
     target: float,
     label: str,
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
 ) -> str:
     """``format_posterior_summary`` for a ``trial_outcomes`` result list."""
     passes = sum(1 for _, err in outcomes if err is None)
-    return format_posterior_summary(label, passes, len(outcomes), target)
+    return format_posterior_summary(
+        label, passes, len(outcomes), target, pass_threshold=pass_threshold
+    )
 
 
 def trial_outcomes_failure_message(

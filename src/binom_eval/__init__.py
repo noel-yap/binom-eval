@@ -4,7 +4,7 @@
 `evals.json`, parsing the stream-json output, and grading each assertion
 over repeated live runs. Because a model's output is non-deterministic,
 every check is treated as a Bernoulli trial with an unknown true pass rate
-``theta``; the suite estimates ``theta`` with a Beta-binomial posterior and
+``θ``; the suite estimates ``θ`` with a Beta-binomial posterior and
 decides PASS/FAIL from how much posterior mass clears a target rate, running
 only as many trials as the verdict needs. The package is split by concern:
 
@@ -63,6 +63,7 @@ from binom_eval.grading import (
     format_posterior_summary,
     graded_runs,
     load_evals,
+    max_target_at_pass_threshold,
     next_batch_size,
     posterior_pass_prob,
     run_eval_adaptive,
@@ -185,6 +186,7 @@ __all__ = [
     "format_posterior_summary",
     "graded_runs",
     "load_evals",
+    "max_target_at_pass_threshold",
     "next_batch_size",
     "posterior_pass_prob",
     "run_eval_adaptive",

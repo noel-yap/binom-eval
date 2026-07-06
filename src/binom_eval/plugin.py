@@ -48,7 +48,7 @@ DEFAULT_CONCURRENCY = 5
 # The true pass rate a good skill should clear. The verdict asks how much
 # posterior mass sits at or above this. 3/5 ("passes at least three of every
 # five attempts") keeps false fails on genuinely-good skills very rare (true
-# rate >= 0.9 -> ~0.2%) while still catching clearly-broken skills; it favours
+# θ ≥ 0.9 -> ~0.2%) while still catching clearly-broken skills; it favours
 # not red-flagging working skills over catching mildly-broken (~0.6) ones.
 DEFAULT_TARGET_RATE = 3.0 / 5.0
 
@@ -222,9 +222,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         default=False,
         help=(
-            "After each passing live-eval check, print "
-            "P(rate >= p0 | k, n) -- the posterior mass at or above the "
-            "target rate p0 given k passes out of n trials."
+            "After each passing live-eval check, print P(θ ≥ θ₀ | k, n) at "
+            "the configured target and max θ₀ (pass@τ | k, n) -- the highest "
+            "target that still PASS-locks at --live-eval-pass-threshold."
         ),
     )
 
@@ -378,5 +378,5 @@ def live_eval_failure_max_chars(pytestconfig: pytest.Config) -> int:
 
 @pytest.fixture(scope="session")
 def live_eval_show_posterior(pytestconfig: pytest.Config) -> bool:
-    """When true, passing checks print ``P(rate >= p0 | k, n)``."""
+    """When true, passing checks print ``P(θ ≥ θ₀ | k, n)`` and ``max θ₀``."""
     return pytestconfig.getoption("--live-eval-show-posterior")

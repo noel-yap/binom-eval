@@ -38,8 +38,8 @@ output (default 2000; zero or negative disables truncation).
 `--live-eval-pass-threshold` overrides the verdict band's PASS edge
 (default `PASS_THRESHOLD`; must be strictly between 0.5 and 1.0 --
 the FAIL edge follows as its complement). `--live-eval-show-posterior`
-prints `P(rate >= p0 | k, n)` for each passing check, for calibrating
-the target rate and pass threshold.
+prints `P(θ ≥ θ₀ | k, n)` and `max θ₀ (pass@τ | k, n)` for each passing
+check, for calibrating the target rate and pass threshold.
 
 ## Architecture
 

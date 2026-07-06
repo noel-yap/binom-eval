@@ -92,12 +92,15 @@ def _record_count_posteriors(
     request: pytest.FixtureRequest,
     counts: list[tuple[str, int, int]],
     target: float,
+    pass_threshold: float,
 ) -> None:
     """Attach a posterior summary per ``(label, passes, trials)`` triple."""
     for label, passes, trials in counts:
         record_live_eval_posterior(
             request.node,
-            format_posterior_summary(label, passes, trials, target),
+            format_posterior_summary(
+                label, passes, trials, target, pass_threshold=pass_threshold
+            ),
         )
 
 
@@ -132,6 +135,7 @@ def register_live_eval_tests(
     def test_eval_assertion(
         eval_runs: dict[str, list[EvalRun]],
         live_eval_target_rate: float,
+        live_eval_pass_threshold: float,
         live_eval_failure_max_chars: int,
         live_eval_show_posterior: bool,
         request: pytest.FixtureRequest,
@@ -146,7 +150,10 @@ def register_live_eval_tests(
             record_live_eval_posterior(
                 request.node,
                 trial_outcomes_posterior_summary(
-                    outcomes, live_eval_target_rate, label
+                    outcomes,
+                    live_eval_target_rate,
+                    label,
+                    pass_threshold=live_eval_pass_threshold,
                 ),
             )
         assert passed, (
@@ -163,6 +170,7 @@ def register_live_eval_tests(
     def test_eval_expectation(
         eval_runs: dict[str, list[EvalRun]],
         live_eval_target_rate: float,
+        live_eval_pass_threshold: float,
         live_eval_show_posterior: bool,
         request: pytest.FixtureRequest,
         eval_id: str,
@@ -184,11 +192,12 @@ def register_live_eval_tests(
                         outcomes,
                         live_eval_target_rate,
                         f"{eval_id}::{assertion['id']}",
+                        pass_threshold=live_eval_pass_threshold,
                     ),
                 )
         assert not failing, (
             f"{eval_id}: {len(failing)} assertion(s) below the bar "
-            f"(P(rate >= {live_eval_target_rate:.3f}) must be >= 0.5):\n"
+            f"(P(θ ≥ {live_eval_target_rate:.3f}) must be >= 0.5):\n"
             + "\n".join(
                 f"  - {aid}: {n}/{total} passed, p_good={p:.3f}"
                 for aid, n, total, p in failing
@@ -202,6 +211,7 @@ def register_live_eval_tests(
         def test_should_trigger_evals_invoked_skill(
             eval_runs: dict[str, list[EvalRun]],
             live_eval_target_rate: float,
+            live_eval_pass_threshold: float,
             live_eval_show_posterior: bool,
             request: pytest.FixtureRequest,
         ) -> None:
@@ -213,11 +223,14 @@ def register_live_eval_tests(
             ]
             if live_eval_show_posterior and not failures:
                 _record_count_posteriors(
-                    request, counts, live_eval_target_rate
+                    request,
+                    counts,
+                    live_eval_target_rate,
+                    live_eval_pass_threshold,
                 )
             assert not failures, (
                 f"{subject_name} invoked below the bar "
-                f"(P(rate >= {live_eval_target_rate:.3f}) must be >= 0.5): "
+                f"(P(θ ≥ {live_eval_target_rate:.3f}) must be >= 0.5): "
                 + ", ".join(f"{eid}: {n}/{total}" for eid, n, total in failures)
             )
 
@@ -228,6 +241,7 @@ def register_live_eval_tests(
         def test_should_invoke_agent_evals(
             eval_runs: dict[str, list[EvalRun]],
             live_eval_target_rate: float,
+            live_eval_pass_threshold: float,
             live_eval_show_posterior: bool,
             request: pytest.FixtureRequest,
         ) -> None:
@@ -241,11 +255,14 @@ def register_live_eval_tests(
             ]
             if live_eval_show_posterior and not failures:
                 _record_count_posteriors(
-                    request, counts, live_eval_target_rate
+                    request,
+                    counts,
+                    live_eval_target_rate,
+                    live_eval_pass_threshold,
                 )
             assert not failures, (
                 f"{subject_name} agent invoked below the bar "
-                f"(P(rate >= {live_eval_target_rate:.3f}) must be >= 0.5): "
+                f"(P(θ ≥ {live_eval_target_rate:.3f}) must be >= 0.5): "
                 + ", ".join(f"{eid}: {n}/{total}" for eid, n, total in failures)
             )
 

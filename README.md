@@ -182,7 +182,7 @@ pytest path/to/evals -m live_eval \
 # demand more posterior confidence before a verdict locks:
 pytest path/to/evals -m live_eval \
     --live-eval-pass-threshold 0.95
-# also print P(rate >= p0 | k, n) for each passing check:
+# also print P(θ ≥ θ₀ | k, n) and max θ₀ (pass@τ | k, n) for each passing check:
 pytest path/to/evals -m live_eval --live-eval-show-posterior
 # run more trials at once; isolate runs for a skill that writes to the tree:
 pytest path/to/evals -m live_eval \
