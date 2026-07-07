@@ -30,7 +30,8 @@ much of it clears a target rate.
 - **Adaptive trials:** trials run in concurrent batches; after each batch the
   posterior is re-graded. Sampling stops as soon as every check locks PASS or
   any check locks FAIL — capping cost at `--live-eval-max-trials` (default 21)
-  while usually spending far fewer.
+  while usually spending far fewer. `--live-eval-min-trials` (default 0) can
+  force a minimum sample before early stopping is allowed.
 - **Concurrency:** the evals in a suite are driven in parallel, and each fans
   its trial batches out too. A single shared semaphore
   (`--live-eval-concurrency`, default 5) caps total in-flight `claude -p` calls
@@ -102,13 +103,14 @@ broken skill correctly failed.
   posterior. This only matters for at-the-bar skills (everything else locks via
   the band first); 0.5 is the principled midpoint.
 
-`TARGET_RATE`, `MAX_TRIALS`, and the band's pass edge are per-run
-overridable from the CLI (`--live-eval-target-rate`,
-`--live-eval-max-trials`, `--live-eval-pass-threshold` — the FAIL edge
-follows as its complement, keeping the band symmetric about 1/2; values
-must sit strictly between 0.5 and 1.0); the floor, prior, and tiebreak
-are module constants in `binom_eval.grading` — change them there if the
-workload assumptions shift.
+`TARGET_RATE`, the trial budget, and the band's pass edge are per-run
+overridable from the CLI: `--live-eval-target-rate`;
+`--live-eval-pass-threshold` (the FAIL edge follows as its complement,
+keeping the band symmetric about 1/2; values must sit strictly between
+0.5 and 1.0); and `--live-eval-min-trials` / `--live-eval-max-trials`
+(`min-trials` must not exceed `max-trials`). The floor, prior, and
+tiebreak are module constants in `binom_eval.grading` — change them
+there if the workload assumptions shift.
 
 ## Install
 
@@ -120,8 +122,8 @@ uv add "binom-eval @ git+https://github.com/noel-yap/binom-eval"
 # pin a release: ...binom-eval.git@v0.1.0
 ```
 
-Installing registers a pytest plugin, so the `--live-eval-max-trials`,
-`--live-eval-target-rate`, `--live-eval-pass-threshold`,
+Installing registers a pytest plugin, so the `--live-eval-target-rate`,
+`--live-eval-pass-threshold`, `--live-eval-min-trials`, `--live-eval-max-trials`,
 `--live-eval-concurrency`, `--live-eval-isolate`, `--live-eval-model`,
 `--live-eval-failure-max-chars`, `--live-eval-show-posterior`, and
 `--live-eval-verbose`
@@ -180,6 +182,9 @@ pytest path/to/evals -m live_eval
 # demand a higher true rate over a smaller budget:
 pytest path/to/evals -m live_eval \
     --live-eval-target-rate 0.8 --live-eval-max-trials 12
+# run at least five trials per eval before early stopping is allowed:
+pytest path/to/evals -m live_eval \
+    --live-eval-min-trials 5 --live-eval-max-trials 12
 # demand more posterior confidence before a verdict locks:
 pytest path/to/evals -m live_eval \
     --live-eval-pass-threshold 0.95

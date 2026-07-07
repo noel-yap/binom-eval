@@ -81,6 +81,7 @@ from binom_eval.grading import (
 from binom_eval.plugin import (
     DEFAULT_CONCURRENCY,
     DEFAULT_MAX_TRIALS,
+    DEFAULT_MIN_TRIALS,
     DEFAULT_TARGET_RATE,
     live_eval_failure_max_chars,
     live_eval_pass_output_enabled,
@@ -213,6 +214,7 @@ __all__ = [
     # plugin
     "DEFAULT_CONCURRENCY",
     "DEFAULT_MAX_TRIALS",
+    "DEFAULT_MIN_TRIALS",
     "DEFAULT_TARGET_RATE",
     "live_eval_failure_max_chars",
     "live_eval_pass_output_enabled",

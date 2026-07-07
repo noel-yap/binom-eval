@@ -845,6 +845,41 @@ class TestNextBatchSize:
         ]
         assert next_batch_size(runs, [_skill_check, check_text], 21, TARGET) == 4
 
+    def test_keeps_running_until_min_trials_even_when_pass_locked(self) -> None:
+        runs = _runs(*([True] * 6))  # p_good > PASS_THRESHOLD
+        assert (
+            next_batch_size(runs, [_skill_check], 21, TARGET, min_trials=10)
+            == 4
+        )
+
+    def test_keeps_running_until_min_trials_even_when_fail_locked(self) -> None:
+        runs = _runs(False, False, False)  # p_good < FAIL_THRESHOLD
+        assert (
+            next_batch_size(runs, [_skill_check], 21, TARGET, min_trials=5)
+            == 2
+        )
+
+    def test_min_trials_caps_at_remaining_budget(self) -> None:
+        runs = _runs(*([True] * 19))
+        assert (
+            next_batch_size(runs, [_skill_check], 21, TARGET, min_trials=25)
+            == 2
+        )
+
+    def test_min_trials_zero_preserves_pass_locked_stop(self) -> None:
+        runs = _runs(*([True] * 6))
+        assert (
+            next_batch_size(runs, [_skill_check], 21, TARGET, min_trials=0)
+            == 0
+        )
+
+    def test_small_min_trials_does_not_shrink_the_opening_batch(self) -> None:
+        unconstrained = next_batch_size([], [_skill_check], 21, TARGET)
+        assert (
+            next_batch_size([], [_skill_check], 21, TARGET, min_trials=1)
+            == unconstrained
+        )
+
     def test_fail_locked_check_short_circuits_others(self) -> None:
         def check_text(run: EvalRun) -> None:
             if not run.assistant_text:
@@ -928,6 +963,40 @@ class TestRunEvalAdaptive:
             model="m",
         )
         assert len(runs) == BATCH_FLOOR
+
+    def test_runs_at_least_min_trials_before_stopping_on_pass(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scripted = [True] * 21
+        state = {"i": 0}
+
+        def fake_batch(
+            item: dict,
+            repo_root: Path,
+            skill_name: str,
+            count: int,
+            *,
+            gate: object = None,
+            isolate: bool = False,
+            model: str,
+            runner: object = None,
+        ) -> list[EvalRun]:
+            chunk = scripted[state["i"] : state["i"] + count]
+            state["i"] += count
+            return _runs(*chunk)
+
+        monkeypatch.setattr(binom_eval.grading, "run_claude_batch", fake_batch)
+        runs = binom_eval.run_eval_adaptive(
+            {"id": "t", "prompt": "p"},
+            Path("."),
+            "demo",
+            max_trials=21,
+            target=TARGET,
+            checks=[_skill_check],
+            min_trials=8,
+            model="m",
+        )
+        assert len(runs) == 8
 
 
 class TestTriggerPassCounts:

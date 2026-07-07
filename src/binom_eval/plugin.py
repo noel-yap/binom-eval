@@ -34,6 +34,10 @@ from binom_eval.stream_json import EvalRun
 # by BATCH_FLOOR, so the worst case is a clean seven rounds of three.
 DEFAULT_MAX_TRIALS = 21
 
+# Minimum trials per eval before the adaptive driver may stop early once the
+# posterior locks. Zero means no floor beyond BATCH_FLOOR's opening batch.
+DEFAULT_MIN_TRIALS = 0
+
 # How many `claude -p` runs may be in flight at once across the whole session.
 # Evals are driven in parallel and each fans its trials out too, so this single
 # ceiling -- enforced by one shared semaphore threaded through every run --
@@ -154,6 +158,18 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "Budget ceiling: the most times any eval is run before the "
             "verdict is forced. Trials usually stop sooner once the "
             f"posterior locks. Default {DEFAULT_MAX_TRIALS}."
+        ),
+    )
+    parser.addoption(
+        "--live-eval-min-trials",
+        action="store",
+        type=int,
+        default=DEFAULT_MIN_TRIALS,
+        help=(
+            "Minimum trials per eval before the adaptive driver may stop "
+            "early once the posterior locks. Default "
+            f"{DEFAULT_MIN_TRIALS} (no minimum beyond the batch floor). "
+            "Must not exceed --live-eval-max-trials."
         ),
     )
     parser.addoption(
@@ -319,6 +335,13 @@ def make_eval_runs_fixture(
         if preflight_error is not None:
             pytest.fail(preflight_error, pytrace=False)
         max_trials = pytestconfig.getoption("--live-eval-max-trials")
+        min_trials = pytestconfig.getoption("--live-eval-min-trials")
+        if min_trials > max_trials:
+            pytest.fail(
+                f"--live-eval-min-trials ({min_trials}) must not exceed "
+                f"--live-eval-max-trials ({max_trials})",
+                pytrace=False,
+            )
         target = pytestconfig.getoption("--live-eval-target-rate")
         pass_threshold = pytestconfig.getoption("--live-eval-pass-threshold")
         if not 0.5 < pass_threshold < 1.0:
@@ -348,6 +371,7 @@ def make_eval_runs_fixture(
                 target,
                 checks,
                 pass_threshold=pass_threshold,
+                min_trials=min_trials,
                 gate=gate,
                 isolate=isolate,
                 model=model,
