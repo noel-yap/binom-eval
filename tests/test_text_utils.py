@@ -3,7 +3,8 @@
 `fenced_blocks` and `code_blocks` are covered here, including the
 citation-fence desynchronization regression; `first_line` is exercised
 through the per-skill `_assertions.py` suites, and the skill-independent
-`missing_from`, `comment_mark_re`, and `marked_regions` are tested here.
+`missing_from`, `comment_mark_re`, `marked_regions`, and
+`comment_sections` are tested here.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 from binom_eval import (
     code_blocks,
     comment_mark_re,
+    comment_sections,
     contains,
     contains_all,
     fenced_blocks,
@@ -81,6 +83,14 @@ class TestCommentMarkRe:
         pattern = comment_mark_re("pure core")
         assert pattern.search("export function f() {}") is None
 
+    def test_does_not_match_indented_comment(self) -> None:
+        pattern = comment_mark_re("pure core")
+        assert pattern.search("  // Pure core: compute") is None
+
+    def test_does_not_match_trailing_same_line_comment(self) -> None:
+        pattern = comment_mark_re("pure core")
+        assert pattern.search("const x = 1; // pure core") is None
+
 
 class TestMarkedRegions:
     def test_plain_marker_excludes_trailing_shell(self) -> None:
@@ -127,6 +137,64 @@ class TestMarkedRegions:
         assert len(regions) == 2
         assert "first" in regions[0]
         assert "second" in regions[1]
+
+    def test_indented_narration_comment_does_not_open_region(self) -> None:
+        text = (
+            "function decide(x) {\n"
+            "  // Pure core: compute the decision\n"
+            "  const d = f(x);\n"
+            "  await db.write();\n"
+            "}\n"
+        )
+        assert marked_regions(text, "pure core") == []
+
+
+class TestCommentSections:
+    def test_two_headed_sections_in_order(self) -> None:
+        text = (
+            "// Header A\n"
+            "body a1\n"
+            "body a2\n"
+            "// Header B\n"
+            "body b1\n"
+        )
+        assert comment_sections(text) == [
+            ("// Header A", "body a1\nbody a2"),
+            ("// Header B", "body b1"),
+        ]
+
+    def test_consecutive_comment_lines_form_one_header(self) -> None:
+        text = "// Header line 1\n// Header line 2\nbody\n"
+        assert comment_sections(text) == [
+            ("// Header line 1\n// Header line 2", "body")
+        ]
+
+    def test_indented_comment_stays_in_body_and_does_not_split(self) -> None:
+        text = "// Header\ncode1\n  // note\ncode2\n"
+        assert comment_sections(text) == [
+            ("// Header", "code1\n  // note\ncode2")
+        ]
+
+    def test_text_before_first_header_is_excluded(self) -> None:
+        text = "preamble\nmore preamble\n// Header\nbody\n"
+        assert comment_sections(text) == [("// Header", "body")]
+
+    def test_pure_section_stops_at_shell_header(self) -> None:
+        text = (
+            "// Pure function: compute the decision\n"
+            "const d = f(x);\n"
+            "// Imperative shell: perform I/O\n"
+            "await db.write(d);\n"
+        )
+        sections = comment_sections(text)
+        assert len(sections) == 2
+        pure_header, pure_body = sections[0]
+        shell_header, shell_body = sections[1]
+        assert "pure" in pure_header.lower()
+        assert "shell" in shell_header.lower()
+        assert "const d = f(x);" in pure_body
+        assert "await" not in pure_body
+        assert "await db.write(d);" in shell_body
 
 
 _CITATION_THEN_TS = """\

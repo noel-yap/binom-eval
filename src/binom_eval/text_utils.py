@@ -8,6 +8,10 @@ per-skill assertions can find declared functions in refactored TypeScript.
 `comment_mark_re` and `marked_regions` locate decoration-tolerant
 `// ... <phrase> ... // ... end <phrase>` comment markers, for skills that
 ask a model to delimit a region (e.g. a "pure core") with comments.
+`comment_sections` is the more general primitive: it splits a block into
+`(header, body)` pairs at each unindented `//` comment line, for skills
+whose sections are labeled with arbitrary wording rather than a single
+known phrase.
 """
 
 from __future__ import annotations
@@ -150,6 +154,11 @@ def comment_mark_re(phrase: str) -> re.Pattern[str]:
     (`// ... end <phrase>`) are excluded, so the opener regex never
     matches a closing marker.
 
+    A section marker is an UNINDENTED comment line -- the `//` must begin
+    the line. An indented narration comment (`  // pure core: ...`) inside
+    a function body, or a trailing same-line comment
+    (`const x = 1; // pure core`), is not a marker and never matches.
+
     Args:
       phrase: The words to look for, e.g. "pure core".
 
@@ -158,8 +167,8 @@ def comment_mark_re(phrase: str) -> re.Pattern[str]:
     """
     words = r"\s+".join(map(re.escape, phrase.split()))
     return re.compile(
-        rf"//(?![^\n]*\bend\s+{words}\b)[^\n]*?\b{words}\b",
-        re.IGNORECASE,
+        rf"^//(?![^\n]*\bend\s+{words}\b)[^\n]*?\b{words}\b",
+        re.IGNORECASE | re.MULTILINE,
     )
 
 
@@ -170,6 +179,12 @@ def marked_regions(text: str, phrase: str) -> list[str]:
     marker (see `comment_mark_re`) to the matching `// ... end <phrase>`
     closing marker, or to the end of `text` when the close is omitted.
 
+    A section marker is an UNINDENTED comment line -- the `//` must begin
+    the line. An indented narration comment (`  // pure core: ...`) inside
+    a function body, or a trailing same-line comment
+    (`const x = 1; // pure core`), is not a marker and never opens or
+    closes a region.
+
     Args:
       text: The model output to search.
       phrase: The words identifying the marked region, e.g. "pure core".
@@ -179,8 +194,44 @@ def marked_regions(text: str, phrase: str) -> list[str]:
     """
     words = r"\s+".join(map(re.escape, phrase.split()))
     region_re = re.compile(
-        rf"//(?![^\n]*\bend\s+{words}\b)[^\n]*?\b{words}\b[^\n]*\n"
-        rf"(.*?)(?=//[^\n]*?\bend\s+{words}\b|\Z)",
-        re.IGNORECASE | re.DOTALL,
+        rf"^//(?![^\n]*\bend\s+{words}\b)[^\n]*?\b{words}\b[^\n]*\n"
+        rf"(.*?)(?=^//[^\n]*?\bend\s+{words}\b|\Z)",
+        re.IGNORECASE | re.DOTALL | re.MULTILINE,
     )
     return region_re.findall(text)
+
+
+def comment_sections(text: str) -> list[tuple[str, str]]:
+    """Split `text` into sections headed by unindented `//` comment lines.
+
+    A header is one or more consecutive lines each starting with `//` at
+    column 0 (joined with newlines); its section body runs until the next
+    header or the end of `text`. Text before the first header is not
+    returned (it has no header to classify it by).
+
+    Indented `//` comments (anything other than a column-0 `//`) belong
+    to the current section body -- they never start or split a section.
+
+    Args:
+      text: The model output to split into headed sections.
+
+    Returns:
+      (header, body) pairs in document order.
+    """
+    sections: list[tuple[str, str]] = []
+    header: list[str] = []
+    body: list[str] = []
+    in_body = False
+    for line in text.splitlines():
+        if line.startswith("//"):
+            if in_body:
+                sections.append(("\n".join(header), "\n".join(body)))
+                header, body = [], []
+                in_body = False
+            header.append(line)
+        elif header:
+            body.append(line)
+            in_body = True
+    if header:
+        sections.append(("\n".join(header), "\n".join(body)))
+    return sections
