@@ -140,16 +140,19 @@ class ClaudeRunner(Runner):
         """Return why `claude -p` cannot run, or None when ready.
 
         Requires the `claude` CLI on PATH and `ANTHROPIC_API_KEY` set: live
-        evals run with `--bare` and `--setting-sources project` under a
-        throwaway `HOME`, so only the workspace's own skills load while user
-        settings and skill roots stay hidden.
+        evals run with `--setting-sources project` under a throwaway `HOME`
+        and a scrubbed env, so the workspace's own project skills load while
+        user-level settings and skill roots stay hidden. `--bare` is
+        deliberately not used -- it suppresses project-skill discovery,
+        which would silently break every should-trigger eval.
         """
         if shutil.which("claude") is None:
             return "claude CLI not found on PATH"
         if not os.environ.get("ANTHROPIC_API_KEY"):
             return (
                 "ANTHROPIC_API_KEY is not set; live evals run with isolated "
-                "settings (`--bare`) and authenticate only via that key."
+                "settings (a throwaway HOME and scrubbed env) and "
+                "authenticate only via that key."
             )
         return None
 
@@ -174,7 +177,6 @@ class ClaudeRunner(Runner):
             "ok",
             "--model",
             model,
-            "--bare",
             "--setting-sources",
             CLAUDE_SETTING_SOURCES,
             "--output-format",
@@ -212,10 +214,13 @@ class ClaudeRunner(Runner):
         `repo_root` directly. `model` is assumed to be set and is always
         forwarded as `--model` so callers select a specific model for eval runs
         without relying on the CLI default. The run executes under a throwaway
-        `HOME` (`fake_home_env`) -- on top of `--bare --setting-sources
-        project` -- so no user-level config or skill root leaks in; project
-        skills from the workspace still load. The run authenticates from
-        `ANTHROPIC_API_KEY`, preserved in that scrubbed env.
+        `HOME` (`fake_home_env`) -- on top of `--setting-sources project` and
+        a scrubbed env (`stripped_env`, via `fake_home_env`) -- so no
+        user-level config or skill root leaks in, while project skills from
+        the workspace still load. `--bare` is deliberately not used here: it
+        suppresses project-skill discovery, which would silently break every
+        should-trigger eval. The run authenticates from `ANTHROPIC_API_KEY`,
+        preserved in that scrubbed env.
 
         A trial that errors out -- nonzero exit, an `is_error` result event
         (API 500/overload, `error_during_execution`, ...), or a stream with
@@ -228,7 +233,6 @@ class ClaudeRunner(Runner):
             "claude",
             "-p",
             prompt,
-            "--bare",
             "--setting-sources",
             CLAUDE_SETTING_SOURCES,
             "--output-format",
