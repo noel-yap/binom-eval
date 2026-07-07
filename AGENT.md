@@ -17,6 +17,7 @@ Live eval options:
 ```bash
 pytest path/to/evals -m live_eval \
     --live-eval-target-rate 0.8 \
+    --live-eval-min-trials 5 \
     --live-eval-max-trials 12 \
     --live-eval-concurrency 8 \
     --live-eval-isolate \

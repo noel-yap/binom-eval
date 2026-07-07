@@ -12,7 +12,12 @@ from typing import Any
 
 import pytest
 
-from binom_eval import DEFAULT_MAX_TRIALS, DEFAULT_TARGET_RATE, plugin
+from binom_eval import (
+    DEFAULT_MAX_TRIALS,
+    DEFAULT_MIN_TRIALS,
+    DEFAULT_TARGET_RATE,
+    plugin,
+)
 from binom_eval.stream_json import EvalRun
 from binom_eval.grading import (
     BATCH_FLOOR,
@@ -47,6 +52,7 @@ class TestPytestAddOption:
     def test_registers_both_live_eval_options(self) -> None:
         options = self._options()
         assert "--live-eval-max-trials" in options
+        assert "--live-eval-min-trials" in options
         assert "--live-eval-target-rate" in options
         assert "--live-eval-pass-threshold" in options
         assert "--live-eval-model" in options
@@ -57,6 +63,11 @@ class TestPytestAddOption:
     def test_max_trials_defaults_to_constant_and_is_int(self) -> None:
         opt = self._options()["--live-eval-max-trials"]
         assert opt["default"] == DEFAULT_MAX_TRIALS
+        assert opt["type"] is int
+
+    def test_min_trials_defaults_to_constant_and_is_int(self) -> None:
+        opt = self._options()["--live-eval-min-trials"]
+        assert opt["default"] == DEFAULT_MIN_TRIALS
         assert opt["type"] is int
 
     def test_target_rate_defaults_to_constant_and_is_float(self) -> None:
@@ -123,9 +134,11 @@ class _StubConfig:
         isolate: bool = False,
         model: str | None = "claude:haiku",
         pass_threshold: float = PASS_THRESHOLD,
+        min_trials: int = DEFAULT_MIN_TRIALS,
     ) -> None:
         self._options = {
             "--live-eval-max-trials": max_trials,
+            "--live-eval-min-trials": min_trials,
             "--live-eval-target-rate": target,
             "--live-eval-pass-threshold": pass_threshold,
             "--live-eval-concurrency": concurrency,
@@ -244,6 +257,21 @@ class TestMakeEvalRunsFixture:
                 _StubConfig(21, 2.0 / 3.0, pass_threshold=1.0)
             )
 
+    def test_fails_when_min_trials_exceeds_max_trials(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            plugin,
+            "resolve_runner",
+            lambda _spec: ("claude", "m", _FakeRunner()),
+        )
+        with pytest.raises(
+            pytest.fail.Exception, match="must not exceed"
+        ):
+            self._fixture_fn()(
+                _StubConfig(10, 2.0 / 3.0, min_trials=11)
+            )
+
     def test_builds_runs_keyed_by_eval_id_when_cli_present(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -269,6 +297,7 @@ class TestMakeEvalRunsFixture:
             checks: list[Any],
             *,
             pass_threshold: float = PASS_THRESHOLD,
+            min_trials: int = 0,
             gate: Any = None,
             isolate: bool = False,
             model: str,
@@ -322,6 +351,7 @@ class TestMakeEvalRunsFixture:
             checks: list[Any],
             *,
             pass_threshold: float = PASS_THRESHOLD,
+            min_trials: int = 0,
             gate: Any = None,
             isolate: bool = False,
             model: str,
@@ -341,6 +371,55 @@ class TestMakeEvalRunsFixture:
 
         self._fixture_fn()(
             _StubConfig(21, 2.0 / 3.0, pass_threshold=custom)
+        )
+
+        assert calls == [custom]
+
+    def test_forwards_custom_min_trials_to_adaptive(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            plugin,
+            "resolve_runner",
+            lambda _spec: ("claude", "m", _FakeRunner()),
+        )
+        monkeypatch.setattr(
+            plugin,
+            "load_evals",
+            lambda _path, _handlers: [{"id": "e1", "assertions": []}],
+        )
+        custom = 7
+        calls: list[int] = []
+
+        def fake_adaptive(
+            item: dict[str, Any],
+            repo_root: Path,
+            skill_name: str,
+            max_trials: int,
+            target: float,
+            checks: list[Any],
+            *,
+            pass_threshold: float = PASS_THRESHOLD,
+            min_trials: int = 0,
+            gate: Any = None,
+            isolate: bool = False,
+            model: str,
+            runner: Any = None,
+        ) -> list[EvalRun]:
+            calls.append(min_trials)
+            return [
+                EvalRun(
+                    eval_id=item["id"],
+                    prompt="",
+                    skill_invoked=False,
+                    assistant_text="",
+                )
+            ]
+
+        monkeypatch.setattr(plugin, "run_eval_adaptive", fake_adaptive)
+
+        self._fixture_fn()(
+            _StubConfig(21, 2.0 / 3.0, min_trials=custom)
         )
 
         assert calls == [custom]

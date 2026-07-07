@@ -432,6 +432,7 @@ def next_batch_size(
     target: float,
     *,
     pass_threshold: float = PASS_THRESHOLD,
+    min_trials: int = 0,
 ) -> int:
     """How many trials to run next, or 0 once the verdict is fixed.
 
@@ -451,10 +452,21 @@ def next_batch_size(
     `run_eval_adaptive` re-grades after each batch, so the next one shrinks
     as the posteriors converge. Errored trials count against the budget
     (their cost was spent) but not toward any posterior -- see `graded_runs`.
+
+    ``min_trials`` only postpones stopping: when the adaptive logic would
+    stop (verdict locked) before ``min_trials`` trials have run, the driver
+    keeps running until the floor is met. It never changes the size of
+    batches the adaptive logic already wants.
     """
     remaining = max_trials - len(runs)
     if remaining <= 0:
         return 0
+    # A "stop" (batch 0) is postponed while the min-trials floor is unmet:
+    # instead of stopping, run just enough trials to reach the floor.
+    if len(runs) < min_trials:
+        stop_batch = min(min_trials - len(runs), remaining)
+    else:
+        stop_batch = 0
     graded = graded_runs(runs)
     trials_done = len(graded)
     shortfalls: list[int] = []
@@ -464,7 +476,8 @@ def next_batch_size(
             passes, trials_done, target, pass_threshold=pass_threshold
         )
         if verdict is Verdict.FAIL:
-            return 0  # eval already fails; no batch can change that.
+            # Eval already fails; no batch can change that.
+            return stop_batch
         if verdict is Verdict.UNDETERMINED:
             shortfalls.append(
                 _resolve_shortfall(
@@ -476,7 +489,7 @@ def next_batch_size(
                 )
             )
     if not shortfalls:  # every check locked PASS (or there are no checks).
-        return 0
+        return stop_batch
     return min(max(max(shortfalls), BATCH_FLOOR), remaining)
 
 
@@ -489,6 +502,7 @@ def run_eval_adaptive(
     checks: list[Callable[[EvalRun], None]],
     *,
     pass_threshold: float = PASS_THRESHOLD,
+    min_trials: int = 0,
     gate: threading.Semaphore | None = None,
     isolate: bool = False,
     model: str,
@@ -514,7 +528,12 @@ def run_eval_adaptive(
     """
     runs: list[EvalRun] = []
     batch = next_batch_size(
-        runs, checks, max_trials, target, pass_threshold=pass_threshold
+        runs,
+        checks,
+        max_trials,
+        target,
+        pass_threshold=pass_threshold,
+        min_trials=min_trials,
     )
     while batch > 0:
         runs.extend(
@@ -530,7 +549,12 @@ def run_eval_adaptive(
             )
         )
         batch = next_batch_size(
-            runs, checks, max_trials, target, pass_threshold=pass_threshold
+            runs,
+            checks,
+            max_trials,
+            target,
+            pass_threshold=pass_threshold,
+            min_trials=min_trials,
         )
     return runs
 
