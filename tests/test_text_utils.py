@@ -11,6 +11,11 @@ and `before_after_snippets` (the bracketed `BEGIN/END BEFORE` and
 from __future__ import annotations
 
 from binom_eval import (
+    BEFORE_AFTER_PROMPT_INSTRUCTION,
+    BEGIN_AFTER_MARKER,
+    BEGIN_BEFORE_MARKER,
+    END_AFTER_MARKER,
+    END_BEFORE_MARKER,
     before_after_snippets,
     code_blocks,
     comment_mark_re,
@@ -445,3 +450,13 @@ class TestBeforeAfterSnippets:
             "// <<<END BEFORE>>> //\n"
         )
         assert before_after_snippets(text) == ("first old", None)
+
+
+class TestBeforeAfterPromptInstruction:
+    def test_names_all_four_marker_lines_verbatim(self) -> None:
+        # Guards the derivation: the instruction is built from the marker
+        # constants, so each must appear in it verbatim.
+        assert BEGIN_BEFORE_MARKER in BEFORE_AFTER_PROMPT_INSTRUCTION
+        assert END_BEFORE_MARKER in BEFORE_AFTER_PROMPT_INSTRUCTION
+        assert BEGIN_AFTER_MARKER in BEFORE_AFTER_PROMPT_INSTRUCTION
+        assert END_AFTER_MARKER in BEFORE_AFTER_PROMPT_INSTRUCTION

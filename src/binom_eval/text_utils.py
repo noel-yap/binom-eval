@@ -16,7 +16,8 @@ known phrase. The `BEGIN_BEFORE_MARKER` / `END_BEFORE_MARKER` and
 `before_after_snippets` are the framework's canonical before/refactor
 delineators, for skills that ask a model to bracket its original and
 refactored code in exact-match begin/end marker pairs rather than an
-arbitrary phrase.
+arbitrary phrase; `BEFORE_AFTER_PROMPT_INSTRUCTION` is the prompt-side
+wording that tells the model to emit those markers.
 """
 
 from __future__ import annotations
@@ -38,6 +39,19 @@ BEGIN_BEFORE_MARKER = "// <<<BEGIN BEFORE>>> //"
 END_BEFORE_MARKER = "// <<<END BEFORE>>> //"
 BEGIN_AFTER_MARKER = "// <<<BEGIN AFTER>>> //"
 END_AFTER_MARKER = "// <<<END AFTER>>> //"
+
+# The prompt-side half of the delineator contract, derived from the marker
+# constants so they stay the single source of truth; the extraction-side
+# half is `before_after_snippets`. The framework appends this to every
+# expanded eval prompt -- its wording is conditional ("If your response
+# presents both..."), so it is harmless when no refactor is shown.
+BEFORE_AFTER_PROMPT_INSTRUCTION = (
+    "If your response presents both the original and the"
+    " refactored code, delimit them with these exact marker"
+    f" lines: the original between `{BEGIN_BEFORE_MARKER}` and"
+    f" `{END_BEFORE_MARKER}`, and the refactored code between"
+    f" `{BEGIN_AFTER_MARKER}` and `{END_AFTER_MARKER}`."
+)
 
 # A fence line: up to three spaces of indent, ``` and the rest of the line
 # as the info string (CommonMark reads the whole remainder, so multi-word

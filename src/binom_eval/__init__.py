@@ -14,7 +14,9 @@ only as many trials as the verdict needs. The package is split by concern:
     `comment_sections` for splitting a block at arbitrary `//` comment
     headers, and the canonical bracketed `BEGIN/END BEFORE` and
     `BEGIN/END AFTER` sentinel markers with `before_after_snippets` for
-    extracting a before/refactor region pair).
+    extracting a before/refactor region pair and
+    `BEFORE_AFTER_PROMPT_INSTRUCTION` for requesting the markers in
+    prompts).
   * `stream_json` -- the `EvalRun` dataclass and `parse_stream_json`, which
     turn one `claude -p` run's stdout into an `EvalRun`.
   * `runner` -- the subprocess/env layer: the `Runner` backends
@@ -136,6 +138,7 @@ from binom_eval.stream_json import (
 )
 from binom_eval.text_utils import (
     ARROW_FN_RE,
+    BEFORE_AFTER_PROMPT_INSTRUCTION,
     BEGIN_AFTER_MARKER,
     BEGIN_BEFORE_MARKER,
     END_AFTER_MARKER,
@@ -157,6 +160,7 @@ from binom_eval.text_utils import (
 __all__ = [
     # text_utils
     "ARROW_FN_RE",
+    "BEFORE_AFTER_PROMPT_INSTRUCTION",
     "BEGIN_AFTER_MARKER",
     "BEGIN_BEFORE_MARKER",
     "END_AFTER_MARKER",

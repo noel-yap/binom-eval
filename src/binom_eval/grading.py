@@ -44,6 +44,7 @@ from typing import Any
 
 from binom_eval.runner import Runner, run_claude_batch
 from binom_eval.stream_json import EvalRun
+from binom_eval.text_utils import BEFORE_AFTER_PROMPT_INSTRUCTION
 
 # Beta(1, 1) prior: uniform over θ, i.e. no prior opinion on the rate.
 PRIOR_ALPHA = 1.0
@@ -588,11 +589,19 @@ def assert_handler_coverage(
 def expand_eval_item(item: dict[str, Any], eval_dir: Path) -> dict[str, Any]:
     """Return one eval dict with ``prompt_template`` + ``fixture`` expanded.
 
-    For ``should_trigger`` evals the prompt is extended with a constraint
-    naming the only skill that should be used. The skill name is derived from
-    the directory layout: ``evals.json`` sits two levels below the skill root
-    (``{skill}/evals/{lang}/evals.json``), so ``eval_dir.parents[1].name``
-    is the skill name without needing a redundant field in ``evals.json``.
+    The framework injects two prompt additions during expansion. For
+    ``should_trigger`` evals the prompt is extended with a constraint
+    naming the only skill that should be used; the skill name is derived
+    from the directory layout: ``evals.json`` sits two levels below the
+    skill root (``{skill}/evals/{lang}/evals.json``), so
+    ``eval_dir.parents[1].name`` is the skill name without needing a
+    redundant field in ``evals.json``. Every expanded eval -- trigger and
+    non-trigger alike -- then gets ``BEFORE_AFTER_PROMPT_INSTRUCTION``
+    appended, telling the model that IF it presents before-and-after
+    snippets it must delimit them with the framework's marker lines; the
+    instruction's own wording is conditional, so it is harmless when no
+    refactor is shown. Evals supplying a finished ``prompt`` (no
+    template) are returned unmodified.
     """
     expanded = dict(item)
     fixture = expanded.pop("fixture", None)
@@ -605,6 +614,9 @@ def expand_eval_item(item: dict[str, Any], eval_dir: Path) -> dict[str, Any]:
                 f"\n\nUse only the `{skill_name}` skill."
                 " Do not invoke any other skill."
             )
+        # Appended pre-format like the trigger constraint; the instruction
+        # contains no `{`/`}`, so `.format` passes it through untouched.
+        template += "\n\n" + BEFORE_AFTER_PROMPT_INSTRUCTION
         expanded["prompt"] = template.format(fixture=content)
         expanded["prompt_input"] = content
     elif fixture is not None or template is not None:
