@@ -28,6 +28,7 @@ from binom_eval import (
     FAIL_THRESHOLD,
     PASS_THRESHOLD,
     AssertionFailure,
+    BEFORE_AFTER_PROMPT_INSTRUCTION,
     EvalRun,
     TrialFailure,
     _check_failures,
@@ -1035,7 +1036,10 @@ class TestExpandEvals:
             )
         )
         evals = expand_evals(evals_path)
-        assert evals[0]["prompt"] == "Refactor:\n```\nexport const x = 1;\n\n```\n"
+        assert evals[0]["prompt"] == (
+            "Refactor:\n```\nexport const x = 1;\n\n```\n"
+            "\n\n" + BEFORE_AFTER_PROMPT_INSTRUCTION
+        )
         assert evals[0]["prompt_input"] == "export const x = 1;\n"
 
     def test_load_evals_passes_through_literal_prompt(self, tmp_path: Path) -> None:
@@ -1048,6 +1052,8 @@ class TestExpandEvals:
     def test_returns_item_unchanged_without_template_or_fixture(
         self, tmp_path: Path
     ) -> None:
+        # A finished prompt gets NO framework additions -- not even the
+        # before/after marker instruction.
         item = {"id": "plain", "prompt": "hello", "assertions": []}
         assert expand_eval_item(item, tmp_path) == item
 
@@ -1083,7 +1089,10 @@ class TestExpandEvals:
         )
         assert "prompt_template" not in result
         assert "fixture" not in result
-        assert result["prompt"] == "Content:\nfixture body\n"
+        assert result["prompt"] == (
+            "Content:\nfixture body\n\n\n"
+            + BEFORE_AFTER_PROMPT_INSTRUCTION
+        )
 
     def test_appends_skill_constraint_for_should_trigger_evals(
         self, tmp_path: Path
@@ -1124,3 +1133,38 @@ class TestExpandEvals:
             skill_dir,
         )
         assert "Use only" not in result["prompt"]
+
+    def test_marker_instruction_appended_for_should_trigger_eval(
+        self, tmp_path: Path
+    ) -> None:
+        skill_dir = tmp_path / "my-skill" / "evals" / "typescript"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "sample.ts").write_text("const x = 1;\n")
+        result = expand_eval_item(
+            {
+                "id": "demo",
+                "prompt_template": "Refactor:\n{fixture}",
+                "fixture": "sample.ts",
+                "should_trigger": True,
+                "assertions": [],
+            },
+            skill_dir,
+        )
+        assert result["prompt"].endswith(BEFORE_AFTER_PROMPT_INSTRUCTION)
+
+    def test_marker_instruction_appended_without_should_trigger(
+        self, tmp_path: Path
+    ) -> None:
+        skill_dir = tmp_path / "my-skill" / "evals" / "typescript"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "sample.ts").write_text("const x = 1;\n")
+        result = expand_eval_item(
+            {
+                "id": "demo",
+                "prompt_template": "Refactor:\n{fixture}",
+                "fixture": "sample.ts",
+                "assertions": [],
+            },
+            skill_dir,
+        )
+        assert result["prompt"].endswith(BEFORE_AFTER_PROMPT_INSTRUCTION)

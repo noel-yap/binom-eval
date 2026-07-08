@@ -11,7 +11,13 @@ ask a model to delimit a region (e.g. a "pure core") with comments.
 `comment_sections` is the more general primitive: it splits a block into
 `(header, body)` pairs at each unindented `//` comment line, for skills
 whose sections are labeled with arbitrary wording rather than a single
-known phrase.
+known phrase. The `BEGIN_BEFORE_MARKER` / `END_BEFORE_MARKER` and
+`BEGIN_AFTER_MARKER` / `END_AFTER_MARKER` sentinel pairs and
+`before_after_snippets` are the framework's canonical before/refactor
+delineators, for skills that ask a model to bracket its original and
+refactored code in exact-match begin/end marker pairs rather than an
+arbitrary phrase; `BEFORE_AFTER_PROMPT_INSTRUCTION` is the prompt-side
+wording that tells the model to emit those markers.
 """
 
 from __future__ import annotations
@@ -21,6 +27,30 @@ import re
 NAMED_FN_RE = re.compile(r"\bfunction\s+(\w+)\s*\(")
 ARROW_FN_RE = re.compile(
     r"\bconst\s+(\w+)\s*(?::[^=]+)?=\s*(?:\([^)]*\)|\w+)\s*(?::[^=]+)?=>"
+)
+
+# The framework's canonical before/refactor delineators. Consumer prompts
+# instruct the model to emit these lines verbatim to bracket its original
+# code and its refactored code -- see `before_after_snippets`. The
+# `<<<...>>>` sentinel plus the trailing `//` are chosen precisely because
+# that shape never occurs in ordinary code comments, so a plain `// before`
+# narration line can never be mistaken for a delineator.
+BEGIN_BEFORE_MARKER = "// <<<BEGIN BEFORE>>> //"
+END_BEFORE_MARKER = "// <<<END BEFORE>>> //"
+BEGIN_AFTER_MARKER = "// <<<BEGIN AFTER>>> //"
+END_AFTER_MARKER = "// <<<END AFTER>>> //"
+
+# The prompt-side half of the delineator contract, derived from the marker
+# constants so they stay the single source of truth; the extraction-side
+# half is `before_after_snippets`. The framework appends this to every
+# expanded eval prompt -- its wording is conditional ("If your response
+# presents both..."), so it is harmless when no refactor is shown.
+BEFORE_AFTER_PROMPT_INSTRUCTION = (
+    "If your response presents both the original and the"
+    " refactored code, delimit them with these exact marker"
+    f" lines: the original between `{BEGIN_BEFORE_MARKER}` and"
+    f" `{END_BEFORE_MARKER}`, and the refactored code between"
+    f" `{BEGIN_AFTER_MARKER}` and `{END_AFTER_MARKER}`."
 )
 
 # A fence line: up to three spaces of indent, ``` and the rest of the line
@@ -245,3 +275,136 @@ def comment_sections(text: str) -> list[tuple[str, str]]:
     if header:
         sections.append(("\n".join(header), "\n".join(body)))
     return sections
+
+
+def _marker_line_re(marker: str) -> re.Pattern[str]:
+    r"""Compile a whole-line pattern for one delineator constant.
+
+    The marker's whitespace-separated tokens are rejoined with `\s*`, so
+    the match tolerates spacing between the `//`, the sentinel, and the
+    trailing `//`, plus leading/trailing whitespace and case differences --
+    while still requiring the ENTIRE line to be exactly the marker's
+    tokens. Deriving the pattern from the constant keeps the constants the
+    single source of truth. This is intentionally stricter than
+    `comment_mark_re`'s decoration-tolerant label matching: the prompt
+    dictates the exact line a model must emit, so extraction can demand it
+    verbatim.
+
+    Args:
+      marker: A delineator constant such as `BEGIN_BEFORE_MARKER`.
+
+    Returns:
+      A compiled, case-insensitive, multiline whole-line regex.
+    """
+    words = r"\s*".join(map(re.escape, marker.split()))
+    return re.compile(rf"^\s*{words}\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+_BEGIN_BEFORE_RE = _marker_line_re(BEGIN_BEFORE_MARKER)
+_END_BEFORE_RE = _marker_line_re(END_BEFORE_MARKER)
+_BEGIN_AFTER_RE = _marker_line_re(BEGIN_AFTER_MARKER)
+_END_AFTER_RE = _marker_line_re(END_AFTER_MARKER)
+
+# All four patterns, for finding the nearest marker line of ANY kind when
+# a region's own closer is missing.
+_ALL_MARKER_RES = (
+    _BEGIN_BEFORE_RE,
+    _END_BEFORE_RE,
+    _BEGIN_AFTER_RE,
+    _END_AFTER_RE,
+)
+
+
+def _marker_spans(text: str) -> list[tuple[int, int]]:
+    """Every marker line of any kind in `text`, as (start, end) spans.
+
+    Spans from all four delineator patterns are collected and sorted by
+    position, so callers can find the nearest marker line after an opener
+    whatever its kind.
+    """
+    return sorted(
+        match.span()
+        for pattern in _ALL_MARKER_RES
+        for match in pattern.finditer(text)
+    )
+
+
+def _bracketed_region(
+    text: str, begin_re: re.Pattern[str], end_re: re.Pattern[str]
+) -> str | None:
+    """The first `begin_re`...`end_re` region of `text`, or None.
+
+    The region runs from the line after the first `begin_re` marker line
+    to its `end_re` closer. When the closer is missing, the region
+    degrades gracefully: it ends at the NEXT marker line of ANY kind after
+    the opener, or at the end of `text` if none follows (the same
+    degradation idiom as `marked_regions`' EOF fallback). Marker lines are
+    excluded; the region is stripped only of leading/trailing newlines.
+    """
+    begin = begin_re.search(text)
+    if begin is None:
+        return None
+    end = end_re.search(text, begin.end())
+    if end is not None:
+        region_end = end.start()
+    else:
+        following = [
+            start for start, _ in _marker_spans(text) if start >= begin.end()
+        ]
+        region_end = following[0] if following else len(text)
+    return text[begin.end():region_end].strip("\r\n")
+
+
+def before_after_snippets(text: str) -> tuple[str | None, str | None]:
+    r"""Extract the bracketed BEFORE and AFTER regions of `text`.
+
+    A marker is a line whose ENTIRE content is one of the framework's four
+    delineators (`BEGIN_BEFORE_MARKER`, `END_BEFORE_MARKER`,
+    `BEGIN_AFTER_MARKER`, `END_AFTER_MARKER`), matched case-insensitively
+    and tolerating whitespace between the marker's tokens and around the
+    line (see `_marker_line_re`). Whole-line matching of an exact sentinel
+    is deliberate: a decorated line (`// <<<BEGIN BEFORE>>> // the
+    original`), a sentinel missing its trailing `//`, a prose comment
+    (`// after extracting helpers, ...`), and a bare `// BEFORE` narration
+    line as it might occur in real code are NOT markers -- only the exact
+    sentinel line is, unlike the decoration-tolerant label matching
+    `comment_mark_re` does. The prompt dictates the exact lines to emit,
+    so extraction can demand them verbatim.
+
+    Each side is extracted INDEPENDENTLY: the before snippet is the text
+    between the first `BEGIN_BEFORE_MARKER` line and its closing
+    `END_BEFORE_MARKER` line, and the after snippet likewise for the AFTER
+    pair. Because the sides do not interact, the regions may appear in
+    either order in `text`. First occurrence wins per side; a second
+    bracketed region of the same kind is ignored.
+
+    When a region's closer is missing, extraction degrades gracefully: the
+    region ends at the NEXT marker line of ANY of the four kinds after its
+    opener, or at the end of `text` if none follows (the same degradation
+    idiom as `marked_regions`' EOF fallback). No BEGIN marker for a side
+    yields `None` for that side. Marker lines themselves are excluded from
+    both snippets. Each snippet is stripped only of leading/trailing
+    newlines (`.strip("\r\n")`), so internal indentation -- including a
+    snippet's first line -- is preserved verbatim.
+
+    The regions are bracketed rather than merely opened so that trailing
+    material a model appends after the refactor -- usage examples, updated
+    tests -- does not leak into the after snippet.
+
+    Typical use: the caller joins fenced code blocks (e.g.
+    `"\n".join(code_blocks(run.assistant_text))`) and splits the result,
+    so extraction works whether the model emitted one code block containing
+    both bracketed regions or two blocks each containing its own.
+
+    Args:
+      text: Model output expected to contain the bracketed BEFORE and/or
+        AFTER regions.
+
+    Returns:
+      `(before, after)`, either of which is `None` when its BEGIN marker
+      is absent.
+    """
+    return (
+        _bracketed_region(text, _BEGIN_BEFORE_RE, _END_BEFORE_RE),
+        _bracketed_region(text, _BEGIN_AFTER_RE, _END_AFTER_RE),
+    )

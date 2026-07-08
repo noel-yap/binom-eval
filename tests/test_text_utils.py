@@ -3,13 +3,20 @@
 `fenced_blocks` and `code_blocks` are covered here, including the
 citation-fence desynchronization regression; `first_line` is exercised
 through the per-skill `_assertions.py` suites, and the skill-independent
-`missing_from`, `comment_mark_re`, `marked_regions`, and
-`comment_sections` are tested here.
+`missing_from`, `comment_mark_re`, `marked_regions`, `comment_sections`,
+and `before_after_snippets` (the bracketed `BEGIN/END BEFORE` and
+`BEGIN/END AFTER` sentinel markers) are tested here.
 """
 
 from __future__ import annotations
 
 from binom_eval import (
+    BEFORE_AFTER_PROMPT_INSTRUCTION,
+    BEGIN_AFTER_MARKER,
+    BEGIN_BEFORE_MARKER,
+    END_AFTER_MARKER,
+    END_BEFORE_MARKER,
+    before_after_snippets,
     code_blocks,
     comment_mark_re,
     comment_sections,
@@ -301,3 +308,155 @@ class TestCodeBlocks:
 class TestHasCodeBlocksCountsAnyFence:
     def test_true_for_citation_fenced_block(self) -> None:
         assert has_code_blocks("```1:4:src/x.ts\ncode\n```") is True
+
+
+class TestBeforeAfterSnippets:
+    def test_both_regions_bracketed_excludes_marker_lines(self) -> None:
+        text = (
+            "// <<<BEGIN BEFORE>>> //\n"
+            "  const total = a + b;\n"
+            "// <<<END BEFORE>>> //\n"
+            "// <<<BEGIN AFTER>>> //\n"
+            "  const total = sum(a, b);\n"
+            "// <<<END AFTER>>> //\n"
+        )
+        before, after = before_after_snippets(text)
+        assert before == "  const total = a + b;"
+        assert after == "  const total = sum(a, b);"
+
+    def test_two_fenced_blocks_each_containing_its_region(self) -> None:
+        text = (
+            "```typescript\n"
+            "// <<<BEGIN BEFORE>>> //\n"
+            "const total = a + b;\n"
+            "// <<<END BEFORE>>> //\n"
+            "```\n"
+            "```typescript\n"
+            "// <<<BEGIN AFTER>>> //\n"
+            "const total = sum(a, b);\n"
+            "// <<<END AFTER>>> //\n"
+            "```\n"
+        )
+        joined = "\n".join(code_blocks(text))
+        before, after = before_after_snippets(joined)
+        assert before == "const total = a + b;"
+        assert after == "const total = sum(a, b);"
+
+    def test_trailing_tests_after_end_marker_do_not_leak(self) -> None:
+        # The motivating case for bracketing: material a model appends
+        # after the refactor (usage examples, updated tests) stays out of
+        # the after snippet.
+        text = (
+            "// <<<BEGIN AFTER>>> //\n"
+            "const total = sum(a, b);\n"
+            "// <<<END AFTER>>> //\n"
+            "describe('sum', () => {\n"
+            "  it('adds', () => {});\n"
+            "});\n"
+        )
+        before, after = before_after_snippets(text)
+        assert before is None
+        assert after == "const total = sum(a, b);"
+
+    def test_regions_extract_in_either_order(self) -> None:
+        # Sides are extracted independently, so the AFTER region may
+        # precede the BEFORE region in the text.
+        text = (
+            "// <<<BEGIN AFTER>>> //\n"
+            "new code\n"
+            "// <<<END AFTER>>> //\n"
+            "// <<<BEGIN BEFORE>>> //\n"
+            "old code\n"
+            "// <<<END BEFORE>>> //\n"
+        )
+        assert before_after_snippets(text) == ("old code", "new code")
+
+    def test_missing_end_before_stops_at_next_marker_line(self) -> None:
+        text = (
+            "// <<<BEGIN BEFORE>>> //\n"
+            "old code\n"
+            "// <<<BEGIN AFTER>>> //\n"
+            "new code\n"
+            "// <<<END AFTER>>> //\n"
+        )
+        assert before_after_snippets(text) == ("old code", "new code")
+
+    def test_missing_end_after_runs_to_end_of_text(self) -> None:
+        text = (
+            "// <<<BEGIN BEFORE>>> //\n"
+            "old code\n"
+            "// <<<END BEFORE>>> //\n"
+            "// <<<BEGIN AFTER>>> //\n"
+            "new code\n"
+            "more new code\n"
+        )
+        assert before_after_snippets(text) == (
+            "old code",
+            "new code\nmore new code",
+        )
+
+    def test_only_before_region_present(self) -> None:
+        text = (
+            "// <<<BEGIN BEFORE>>> //\n"
+            "old code\n"
+            "// <<<END BEFORE>>> //\n"
+        )
+        assert before_after_snippets(text) == ("old code", None)
+
+    def test_only_after_region_present(self) -> None:
+        text = (
+            "// <<<BEGIN AFTER>>> //\n"
+            "new code\n"
+            "// <<<END AFTER>>> //\n"
+        )
+        assert before_after_snippets(text) == (None, "new code")
+
+    def test_no_markers_returns_none_none(self) -> None:
+        assert before_after_snippets("plain text, no markers\n") == (
+            None,
+            None,
+        )
+
+    def test_case_insensitive_and_spacing_tolerant_markers(self) -> None:
+        text = (
+            "  // <<<begin Before>>> //\n"
+            "old code\n"
+            "//<<<END BEFORE>>>//\n"
+        )
+        assert before_after_snippets(text) == ("old code", None)
+
+    def test_sentinel_without_trailing_slashes_is_not_a_marker(self) -> None:
+        text = "// <<<BEGIN BEFORE>>>\ncode\n"
+        assert before_after_snippets(text) == (None, None)
+
+    def test_decorated_sentinel_line_is_not_a_marker(self) -> None:
+        text = "// <<<BEGIN BEFORE>>> // the original\ncode\n"
+        assert before_after_snippets(text) == (None, None)
+
+    def test_plain_before_after_comments_are_not_markers(self) -> None:
+        # Bare `// BEFORE` / `// AFTER` lines -- realistic code comments --
+        # lack the `<<<...>>> //` sentinel shape, so they are not
+        # delineators.
+        text = "// BEFORE\nold\n// AFTER\nnew\n"
+        assert before_after_snippets(text) == (None, None)
+
+    def test_first_bracketed_region_wins_per_side(self) -> None:
+        text = (
+            "// <<<BEGIN BEFORE>>> //\n"
+            "first old\n"
+            "// <<<END BEFORE>>> //\n"
+            "// <<<BEGIN BEFORE>>> //\n"
+            "second old\n"
+            "// <<<END BEFORE>>> //\n"
+        )
+        assert before_after_snippets(text) == ("first old", None)
+
+
+class TestBeforeAfterPromptInstruction:
+    def test_names_all_four_marker_lines_verbatim(self) -> None:
+        # Guards the derivation: the instruction is built from the marker
+        # constants, so each must appear in it verbatim.
+        assert BEGIN_BEFORE_MARKER in BEFORE_AFTER_PROMPT_INSTRUCTION
+        assert END_BEFORE_MARKER in BEFORE_AFTER_PROMPT_INSTRUCTION
+        assert BEGIN_AFTER_MARKER in BEFORE_AFTER_PROMPT_INSTRUCTION
+        assert END_AFTER_MARKER in BEFORE_AFTER_PROMPT_INSTRUCTION

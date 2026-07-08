@@ -137,7 +137,11 @@ A skill's eval suite supplies four things and lets `binom-eval` do the rest:
 
 1. an **`evals.json`** — the prompts and per-eval assertion ids (each eval
    may supply a literal `"prompt"` or a `"prompt_template"` + `"fixture"` pair;
-   fixture paths are relative to the directory containing `evals.json`);
+   fixture paths are relative to the directory containing `evals.json`).
+   Expanded prompts also carry the conditional before/after marker
+   instruction (`BEFORE_AFTER_PROMPT_INSTRUCTION`), so a model that shows
+   original and refactored code delimits them with the framework's
+   sentinel markers;
 2. **assertion handlers** — `dict[str, Callable[[EvalRun], None]]`, each
    raising `AssertionFailure` on failure;
 3. a **`conftest.py`** that binds the `eval_runs` fixture; and
@@ -242,7 +246,7 @@ consider_namespace_packages = true
 | `run_claude`, `run_claude_batch`, `stripped_env` | The `claude -p` I/O layer. |
 | `EvalRun`, `parse_stream_json` | Stream-json parsing into the shared record. |
 | `agent_invoked`, `skill_invoked_in_tools`, `skill_was_invoked`, `agent_or_skill_invoked`, `tool_invoked` | Inspect `EvalRun` for Agent/Skill delegation (bool predicates for use with `assert`). |
-| `code_blocks`, `contains`, `contains_all`, `fenced_blocks`, `has_code_blocks`, `first_line`, `missing_from`, `NAMED_FN_RE`, `ARROW_FN_RE` | Assertion text/regex helpers. |
+| `code_blocks`, `contains`, `contains_all`, `fenced_blocks`, `has_code_blocks`, `first_line`, `missing_from`, `NAMED_FN_RE`, `ARROW_FN_RE`, `BEGIN_BEFORE_MARKER`, `END_BEFORE_MARKER`, `BEGIN_AFTER_MARKER`, `END_AFTER_MARKER`, `before_after_snippets`, `BEFORE_AFTER_PROMPT_INSTRUCTION` | Assertion text/regex helpers. |
 | `load_evals`, `expand_evals`, `assert_handler_coverage` | Load + expand + validate an `evals.json`. |
 
 ## Requirements
