@@ -91,6 +91,19 @@ class TestCommentMarkRe:
         pattern = comment_mark_re("pure core")
         assert pattern.search("const x = 1; // pure core") is None
 
+    def test_does_not_match_phrase_only_in_description(self) -> None:
+        pattern = comment_mark_re("pure core")
+        text = "// Imperative shell: calls the pure core and applies effects"
+        assert pattern.search(text) is None
+
+    def test_matches_decorated_opener_with_no_colon(self) -> None:
+        pattern = comment_mark_re("pure core")
+        assert pattern.search("// --- pure core ---") is not None
+
+    def test_matches_bare_opener_with_no_colon(self) -> None:
+        pattern = comment_mark_re("pure core")
+        assert pattern.search("// PURE CORE") is not None
+
 
 class TestMarkedRegions:
     def test_plain_marker_excludes_trailing_shell(self) -> None:
@@ -147,6 +160,19 @@ class TestMarkedRegions:
             "}\n"
         )
         assert marked_regions(text, "pure core") == []
+
+    def test_phrase_only_in_description_does_not_open_region(self) -> None:
+        text = (
+            "// pure core: data in, data out\n"
+            "code\n"
+            "// end pure core\n"
+            "// Imperative shell: calls the pure core and applies effects\n"
+            "await db.write();\n"
+        )
+        regions = marked_regions(text, "pure core")
+        assert len(regions) == 1
+        assert "code" in regions[0]
+        assert "await" not in regions[0]
 
 
 class TestCommentSections:

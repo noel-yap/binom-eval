@@ -146,11 +146,15 @@ def has_code_blocks(text: str) -> bool:
 
 
 def comment_mark_re(phrase: str) -> re.Pattern[str]:
-    """Compile a decoration-tolerant regex for a `// ... <phrase> ...` comment.
+    """Compile a decoration-tolerant regex for a `// <phrase> ...` comment.
 
-    Matches a line comment containing `phrase` (case-insensitive, words
-    separated by whitespace, word-bounded) regardless of decoration such
-    as `// --- pure core ---`. Lines marking the END of a region
+    Matches a line comment whose LABEL -- the text before the comment's
+    first `:` -- contains `phrase` (case-insensitive, words separated by
+    whitespace, word-bounded), regardless of decoration such as
+    `// --- pure core ---`. A marker must NAME its region: a comment that
+    merely mentions `phrase` in its description after the colon (e.g.
+    `// Imperative shell: calls the pure core and applies effects`) is not
+    a marker and never matches. Lines marking the END of a region
     (`// ... end <phrase>`) are excluded, so the opener regex never
     matches a closing marker.
 
@@ -167,17 +171,23 @@ def comment_mark_re(phrase: str) -> re.Pattern[str]:
     """
     words = r"\s+".join(map(re.escape, phrase.split()))
     return re.compile(
-        rf"^//(?![^\n]*\bend\s+{words}\b)[^\n]*?\b{words}\b",
+        rf"^//(?![^\n]*\bend\s+{words}\b)[^:\n]*\b{words}\b",
         re.IGNORECASE | re.MULTILINE,
     )
 
 
 def marked_regions(text: str, phrase: str) -> list[str]:
-    """Regions between `// ... <phrase>` and `// ... end <phrase>` comments.
+    """Regions between `// <phrase>` and `// ... end <phrase>` comments.
 
     Each region runs from the line after a decoration-tolerant opening
     marker (see `comment_mark_re`) to the matching `// ... end <phrase>`
     closing marker, or to the end of `text` when the close is omitted.
+
+    A marker must NAME its region: `phrase` has to appear in the
+    comment's LABEL, the text before its first `:`. A comment that merely
+    mentions `phrase` in its description after the colon (e.g.
+    `// Imperative shell: calls the pure core and applies effects`) does
+    not open a region.
 
     A section marker is an UNINDENTED comment line -- the `//` must begin
     the line. An indented narration comment (`  // pure core: ...`) inside
@@ -194,7 +204,7 @@ def marked_regions(text: str, phrase: str) -> list[str]:
     """
     words = r"\s+".join(map(re.escape, phrase.split()))
     region_re = re.compile(
-        rf"^//(?![^\n]*\bend\s+{words}\b)[^\n]*?\b{words}\b[^\n]*\n"
+        rf"^//(?![^\n]*\bend\s+{words}\b)[^:\n]*\b{words}\b[^\n]*\n"
         rf"(.*?)(?=^//[^\n]*?\bend\s+{words}\b|\Z)",
         re.IGNORECASE | re.DOTALL | re.MULTILINE,
     )
