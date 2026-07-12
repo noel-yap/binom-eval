@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "binom-eval"
-version = "1.5.0"
+dynamic = ["version"]
 description = "Bayesian (Beta-binomial) grading for AI skill / agent evals run via `claude -p`."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -38,6 +38,11 @@ binom_eval = "binom_eval.plugin"
 
 [dependency-groups]
 dev = ["pytest>=7.0"]
+
+# Version is derived from the latest `vX.Y.Z` git tag (via hatch-vcs /
+# setuptools-scm), so releases only need a tag -- no hardcoded version to bump.
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/binom_eval"]
