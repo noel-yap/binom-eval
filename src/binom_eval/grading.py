@@ -32,7 +32,7 @@ per-skill tests use to grade and report on a completed batch of runs.
 
 from __future__ import annotations
 
-from binom_eval.runner import Runner, run_claude_batch
+from binom_eval.runner import Runner, run_eval_batch
 from binom_eval.posterior import (
     FAIL_THRESHOLD, PASS_THRESHOLD, PRIOR_ALPHA, PRIOR_BETA, Verdict,
     _betainc, _verdict, eval_passed, max_target_at_pass_threshold,

@@ -21,7 +21,7 @@ only as many trials as the verdict needs. The package is split by concern:
     turn one `claude -p` run's stdout into an `EvalRun`.
   * `runner` -- the subprocess/env layer: the `Runner` backends
     (`ClaudeRunner`, `CursorRunner`) selected via `resolve_runner`, the
-    concurrent `run_claude_batch` (throttled by a shared semaphore), and
+    concurrent `run_eval_batch` (throttled by a shared semaphore), and
     `isolated_workdir` for per-run filesystem isolation.
   * `grading` -- the Beta-binomial verdict (`posterior_pass_prob`,
     `eval_passed`), the adaptive trial driver (`next_batch_size`,
@@ -109,13 +109,10 @@ from binom_eval.runner import (
     ClaudeRunner,
     CursorRunner,
     Runner,
-    cli_version,
     isolated_workdir,
     resolve_runner,
-    run_claude,
-    run_claude_batch,
+    run_eval_batch,
     stripped_env,
-    validate_model,
 )
 from binom_eval.stream_json import (
     EvalRun,
@@ -194,13 +191,10 @@ __all__ = [
     "ClaudeRunner",
     "CursorRunner",
     "Runner",
-    "cli_version",
     "isolated_workdir",
     "resolve_runner",
-    "run_claude",
-    "run_claude_batch",
+    "run_eval_batch",
     "stripped_env",
-    "validate_model",
     # grading
     "AssertionFailure",
     "TrialFailure",

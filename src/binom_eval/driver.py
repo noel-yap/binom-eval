@@ -5,7 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from binom_eval.runner import Runner, run_claude_batch
+from binom_eval.runner import Runner, run_eval_batch
 from binom_eval.stream_json import EvalRun
 from binom_eval.posterior import PASS_THRESHOLD, Verdict, _verdict, posterior_pass_prob
 from binom_eval.assertions import assert_check
@@ -210,8 +210,8 @@ def run_eval_adaptive(
     gate: threading.Semaphore | None = None,
     isolate: bool = False,
     model: str,
-    runner: Runner | None = None,
-    batch_runner: Callable[..., list[EvalRun]] = run_claude_batch,
+    runner: Runner,
+    batch_runner: Callable[..., list[EvalRun]] = run_eval_batch,
 ) -> list[EvalRun]:
     """Run trials in optimistic concurrent batches, stopping once the verdict
     is fixed.
@@ -223,15 +223,16 @@ def run_eval_adaptive(
     check, over however many rounds the outcomes require.
 
     `gate`, `isolate`, `model`, and `runner` are forwarded to
-    `run_claude_batch`: the shared semaphore caps total live calls across this
+    `run_eval_batch`: the shared semaphore caps total live calls across this
     eval's batches and any other evals driven in parallel; `isolate` runs
     every trial in its own throwaway copy of `repo_root`; `model` selects the
-    specific model used for all trials; `runner` selects the backend (default
-    `claude -p`). Batches within one eval still run as sequential rounds (each
-    round's verdict decides the next), so concurrency comes from the trials in
-    a round plus evals overlapping above this layer. `batch_runner` defaults
-    to `run_claude_batch` and exists so callers/tests can inject a different
-    batch executor.
+    specific model used for all trials; `runner` is the backend every trial
+    runs against (backend-agnostic -- `ClaudeRunner`, `CursorRunner`, ...).
+    Batches within one eval still run as sequential rounds (each round's
+    verdict decides the next), so concurrency comes from the trials in a round
+    plus evals overlapping above this layer. `batch_runner` defaults to
+    `run_eval_batch` and exists so callers/tests can inject a different batch
+    executor.
     """
     runs: list[EvalRun] = []
     batch = next_batch_size(

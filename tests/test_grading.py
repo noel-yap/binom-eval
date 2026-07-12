@@ -927,6 +927,7 @@ class TestRunEvalAdaptive:
             target=TARGET,
             checks=[_skill_check],
             model="m",
+            runner=binom_eval.ClaudeRunner(),
             batch_runner=fake_batch,
         )
         # First batch is the floor (3); a clean streak then PASS-locks, so it
@@ -957,6 +958,7 @@ class TestRunEvalAdaptive:
             target=TARGET,
             checks=[_skill_check],
             model="m",
+            runner=binom_eval.ClaudeRunner(),
             batch_runner=fake_batch,
         )
         assert len(runs) == BATCH_FLOOR
@@ -989,6 +991,7 @@ class TestRunEvalAdaptive:
             checks=[_skill_check],
             min_trials=8,
             model="m",
+            runner=binom_eval.ClaudeRunner(),
             batch_runner=fake_batch,
         )
         assert len(runs) == 8

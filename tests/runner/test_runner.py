@@ -3,9 +3,9 @@
 Covers the backend-agnostic pieces that live in the package root: env
 scrubbing (`stripped_env`), the per-run workdir (`isolated_workdir`), the
 pure model-probe parser (`_model_probe_rejected`), the `backend:model` spec
-parser (`resolve_runner`), and the concurrent `run_claude_batch` driver. The
+parser (`resolve_runner`), and the concurrent `run_eval_batch` driver. The
 `ClaudeRunner` backend itself is tested in `test_claude_runner.py`;
-`run_claude_batch` is exercised here against an injected fake `Runner`.
+`run_eval_batch` is exercised here against an injected fake `Runner`.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from binom_eval.runner import fake_home_env
 class _FakeRunner(Runner):
     """A `Runner` whose `run` delegates to an injected callable.
 
-    Lets `run_claude_batch` be exercised against a backend that records or
+    Lets `run_eval_batch` be exercised against a backend that records or
     throttles calls without spawning any CLI; `version`/`preflight`/
     `validate_model` are unused by the batch driver and stubbed inert.
     """
@@ -151,7 +151,7 @@ class TestRunClaudeBatch:
                 eval_id="", prompt=prompt, skill_invoked=True, assistant_text=""
             )
 
-        runs = binom_eval.run_claude_batch(
+        runs = binom_eval.run_eval_batch(
             {"id": "e1", "prompt": "p", "prompt_input": "fixture body"},
             Path("."),
             "demo",
@@ -188,7 +188,7 @@ class TestRunClaudeBatch:
                 eval_id="", prompt=prompt, skill_invoked=True, assistant_text=""
             )
 
-        runs = binom_eval.run_claude_batch(
+        runs = binom_eval.run_eval_batch(
             {"id": "e1", "prompt": "p"},
             Path("."),
             "demo",
