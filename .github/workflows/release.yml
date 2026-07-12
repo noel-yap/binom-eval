@@ -18,7 +18,10 @@ jobs:
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - name: Checkout
+        # Full history + tags so hatch-vcs can derive the version from the tag.
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -29,17 +32,19 @@ jobs:
       - name: Build distributions
         run: uv build
 
-      # Fail early if the tag (e.g. v0.1.0) doesn't match the version in
-      # pyproject.toml — keeps the Git tag and the artifact in lock-step.
-      # Also classify PEP 440 pre-release versions (e.g. 0.1.0rc1, 0.1.0a1)
-      # off the normalized version so the GitHub Release is flagged correctly.
+      # Fail early if the tag (e.g. v0.1.0) doesn't match the built artifact's
+      # version — keeps the Git tag and the artifact in lock-step. The version
+      # is derived from the tag via hatch-vcs, so it is read from the built
+      # wheel filename (`uv version` cannot read a dynamic version). Also
+      # classify PEP 440 pre-release versions (e.g. 0.1.0rc1, 0.1.0a1) off the
+      # normalized version so the GitHub Release is flagged correctly.
       - name: Verify tag and classify version
         id: version
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          pkg="$(uv version --short)"
+          pkg="$(ls dist/*.whl | sed -E 's|.*/[A-Za-z0-9_.]+-([0-9][^-]*)-.*\.whl$|\1|' | head -1)"
           if [ "${tag}" != "${pkg}" ]; then
-            echo "::error::tag v${tag} != pyproject version ${pkg}" >&2
+            echo "::error::tag v${tag} != built version ${pkg}" >&2
             exit 1
           fi
           if [[ "${pkg}" =~ (a|b|rc|alpha|beta|dev|pre) ]]; then
