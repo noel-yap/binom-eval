@@ -185,9 +185,9 @@ class TestMakeEvalRunsFixture:
     """
 
     @staticmethod
-    def _fixture_fn() -> Any:
+    def _fixture_fn(**kwargs: Any) -> Any:
         fixture = make_eval_runs_fixture(
-            Path("evals.json"), Path("."), "demo", {}
+            Path("evals.json"), Path("."), "demo", {}, **kwargs
         )
         return fixture.__wrapped__
 
@@ -313,9 +313,9 @@ class TestMakeEvalRunsFixture:
                 )
             ]
 
-        monkeypatch.setattr(plugin, "run_eval_adaptive", fake_adaptive)
-
-        result = self._fixture_fn()(_StubConfig(21, 2.0 / 3.0))
+        result = self._fixture_fn(run_adaptive=fake_adaptive)(
+            _StubConfig(21, 2.0 / 3.0)
+        )
 
         assert set(result.keys()) == {"e1", "e2"}
         assert len(result["e1"]) == 1
@@ -367,9 +367,7 @@ class TestMakeEvalRunsFixture:
                 )
             ]
 
-        monkeypatch.setattr(plugin, "run_eval_adaptive", fake_adaptive)
-
-        self._fixture_fn()(
+        self._fixture_fn(run_adaptive=fake_adaptive)(
             _StubConfig(21, 2.0 / 3.0, pass_threshold=custom)
         )
 
@@ -416,9 +414,7 @@ class TestMakeEvalRunsFixture:
                 )
             ]
 
-        monkeypatch.setattr(plugin, "run_eval_adaptive", fake_adaptive)
-
-        self._fixture_fn()(
+        self._fixture_fn(run_adaptive=fake_adaptive)(
             _StubConfig(21, 2.0 / 3.0, min_trials=custom)
         )
 

@@ -46,6 +46,7 @@ def bind_eval_runs_fixture(
     handlers: dict[str, Callable[[EvalRun], None]],
     *,
     repo_root: Path | None = None,
+    make_fixture: Callable[..., Any] = make_eval_runs_fixture,
 ) -> Callable[..., dict[str, list[EvalRun]]]:
     """Return a session-scoped ``eval_runs`` fixture for an eval directory.
 
@@ -53,11 +54,13 @@ def bind_eval_runs_fixture(
     suite's ``evals/`` folder). When ``repo_root`` is omitted, ``claude -p``
     runs with ``eval_dir`` as the working tree (the bundled example pattern);
     pass an explicit repo root when prompts reference files elsewhere.
+    ``make_fixture`` defaults to `make_eval_runs_fixture` and exists so
+    callers/tests can inject a different fixture factory.
     """
     eval_dir = Path(eval_dir).resolve()
     evals_path = eval_dir / "evals.json"
     root = eval_dir if repo_root is None else Path(repo_root).resolve()
-    return make_eval_runs_fixture(evals_path, root, subject_name, handlers)
+    return make_fixture(evals_path, root, subject_name, handlers)
 
 
 def _assertion_params(evals: list[dict[str, Any]]) -> list[pytest.param]:

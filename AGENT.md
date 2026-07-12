@@ -54,14 +54,19 @@ per-trial detail -- the posterior summary plus every trial's sections
 
 | Module | Role |
 |---|---|
-| `grading.py` | Beta-binomial math (`posterior_pass_prob`, `eval_passed`), adaptive trial driver (`run_eval_adaptive`, `next_batch_size`), grading rollups |
+| `posterior.py` | Beta-binomial math: `posterior_pass_prob`, `eval_passed`, `_verdict`/`Verdict`, `max_target_at_pass_threshold`, and the stdlib `_betainc` (Beta CDF) |
+| `assertions.py` | Assertion protocol: `AssertionFailure`, `assert_check`, and single-trial `evaluate_check` |
+| `loading.py` | `evals.json` loading/expansion: `load_evals`, `expand_evals`, `assert_handler_coverage` |
+| `reporting.py` | Grading rollups + pytest rendering: `trial_outcomes`, `failing_assertions`, `format_posterior_summary`, and the verbose/failure messages |
+| `driver.py` | Adaptive trial driver: `run_eval_adaptive`, `next_batch_size`; the batch executor is an injectable `batch_runner` (defaults to `run_claude_batch`) |
+| `grading.py` | Backward-compatible facade re-exporting every name from the five modules above (kept so existing `binom_eval.grading` imports still resolve) |
 | `plugin.py` | pytest integration: `--live-eval-*` CLI options, `live_eval` marker, `make_eval_runs_fixture` |
 | `suite.py` | Thin consumer wiring: `bind_eval_runs_fixture` (for `conftest.py`) and `register_live_eval_tests` (for `test_evals.py`) |
 | `runner/` | subprocess layer: the `Runner` backends (`ClaudeRunner`, `CursorRunner`) selected by `resolve_runner` from a `backend:model` spec, the throttled `run_claude_batch` (shared `threading.Semaphore`), per-backend `preflight`/`validate_model`, and `isolated_workdir`; `retry.py` holds `RetryPolicy`/`RetryableError` (deadline-aware back-off loop used for the Models API lookup and, via `TRIAL_RETRY`, for transient trial failures — a trial that still errors after retries is returned with `EvalRun.errored=True`) |
 | `stream_json.py` | `EvalRun` dataclass, `parse_stream_json` (parses `claude -p` stdout), skill/agent invocation predicates |
 | `text_utils.py` | Pure text/regex helpers for assertion modules |
 
-### Verdict logic (grading.py)
+### Verdict logic (posterior.py)
 
 - Prior: `Beta(1, 1)` (uniform). Posterior after `k` passes / `n` trials: `Beta(1+k, 1+(n-k))`.
 - `p_good = P(θ ≥ TARGET_RATE | k, n)` via `_betainc` (Lentz continued fraction, stdlib only).

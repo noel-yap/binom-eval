@@ -20,9 +20,7 @@ from binom_eval.plugin import LIVE_EVAL_POSTERIOR_PROPERTY
 from binom_eval.suite import _pass_summary, _record_count_posteriors
 
 
-def test_bind_eval_runs_fixture_delegates_to_make_eval_runs_fixture(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_bind_eval_runs_fixture_delegates_to_make_eval_runs_fixture() -> None:
     eval_dir = Path("/tmp/skill/evals")
     handlers: dict = {"a": lambda r: None}
     sentinel = object()
@@ -32,8 +30,9 @@ def test_bind_eval_runs_fixture_delegates_to_make_eval_runs_fixture(
         captured["args"] = args
         return sentinel
 
-    monkeypatch.setattr("binom_eval.suite.make_eval_runs_fixture", fake_make)
-    result = bind_eval_runs_fixture(eval_dir, "my-skill", handlers)
+    result = bind_eval_runs_fixture(
+        eval_dir, "my-skill", handlers, make_fixture=fake_make
+    )
     assert result is sentinel
     assert captured["args"] == (
         eval_dir.resolve() / "evals.json",
@@ -43,19 +42,19 @@ def test_bind_eval_runs_fixture_delegates_to_make_eval_runs_fixture(
     )
 
 
-def test_bind_eval_runs_fixture_accepts_explicit_repo_root(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_bind_eval_runs_fixture_accepts_explicit_repo_root() -> None:
     eval_dir = Path("/tmp/skill/evals")
     repo_root = Path("/tmp/repo")
     handlers: dict = {}
     captured: dict = {}
 
-    monkeypatch.setattr(
-        "binom_eval.suite.make_eval_runs_fixture",
-        lambda *args, **kwargs: captured.setdefault("args", args),
+    bind_eval_runs_fixture(
+        eval_dir,
+        "my-skill",
+        handlers,
+        repo_root=repo_root,
+        make_fixture=lambda *args, **kwargs: captured.setdefault("args", args),
     )
-    bind_eval_runs_fixture(eval_dir, "my-skill", handlers, repo_root=repo_root)
     assert captured["args"][1] == repo_root.resolve()
 
 

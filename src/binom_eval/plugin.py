@@ -298,6 +298,8 @@ def make_eval_runs_fixture(
     repo_root: Path,
     skill_name: str,
     assertion_handlers: dict[str, Callable[[EvalRun], None]],
+    *,
+    run_adaptive: Callable[..., list[EvalRun]] = run_eval_adaptive,
 ) -> Callable[..., dict[str, list[EvalRun]]]:
     """Build a session-scoped pytest fixture that runs claude -p up to
     `--live-eval-max-trials` times per eval in `evals_path` and returns the
@@ -312,7 +314,9 @@ def make_eval_runs_fixture(
     semaphore (`--live-eval-concurrency`) caps total live calls across all of
     this; `--live-eval-isolate` runs each trial in a throwaway copy of
     `repo_root` for skills that write to the tree. Every run is a fresh live
-    call; results are never cached.
+    call; results are never cached. `run_adaptive` defaults to
+    `run_eval_adaptive` and exists so callers/tests can inject a different
+    adaptive-eval driver.
     """
 
     @pytest.fixture(scope="session")
@@ -363,7 +367,7 @@ def make_eval_runs_fixture(
 
         def build(item: dict[str, Any]) -> list[EvalRun]:
             checks = _eval_checks(item, assertion_handlers, skill_name)
-            return run_eval_adaptive(
+            return run_adaptive(
                 item,
                 repo_root,
                 skill_name,
