@@ -898,9 +898,7 @@ class TestNextBatchSize:
 class TestRunEvalAdaptive:
     """The batch loop accumulates runs until `next_batch_size` returns 0."""
 
-    def test_stops_once_pass_locked(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_stops_once_pass_locked(self) -> None:
         # Every scripted trial passes: the opening floor of 3 runs, then a
         # second batch tips the posterior over PASS_THRESHOLD and it stops.
         scripted = [True] * 21
@@ -921,7 +919,6 @@ class TestRunEvalAdaptive:
             state["i"] += count
             return _runs(*chunk)
 
-        monkeypatch.setattr(binom_eval.grading, "run_claude_batch", fake_batch)
         runs = binom_eval.run_eval_adaptive(
             {"id": "t", "prompt": "p"},
             Path("."),
@@ -930,15 +927,15 @@ class TestRunEvalAdaptive:
             target=TARGET,
             checks=[_skill_check],
             model="m",
+            runner=binom_eval.ClaudeRunner(),
+            batch_runner=fake_batch,
         )
         # First batch is the floor (3); a clean streak then PASS-locks, so it
         # stops well short of the 21-trial budget.
         assert BATCH_FLOOR <= len(runs) < 21
         assert all(run.skill_invoked for run in runs)
 
-    def test_stops_fast_when_failing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_stops_fast_when_failing(self) -> None:
         # A skill that always misses: the opening floor of 3 FAIL-locks it.
         def fake_batch(
             item: dict,
@@ -953,7 +950,6 @@ class TestRunEvalAdaptive:
         ) -> list[EvalRun]:
             return _runs(*([False] * count))
 
-        monkeypatch.setattr(binom_eval.grading, "run_claude_batch", fake_batch)
         runs = binom_eval.run_eval_adaptive(
             {"id": "t", "prompt": "p"},
             Path("."),
@@ -962,12 +958,12 @@ class TestRunEvalAdaptive:
             target=TARGET,
             checks=[_skill_check],
             model="m",
+            runner=binom_eval.ClaudeRunner(),
+            batch_runner=fake_batch,
         )
         assert len(runs) == BATCH_FLOOR
 
-    def test_runs_at_least_min_trials_before_stopping_on_pass(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_runs_at_least_min_trials_before_stopping_on_pass(self) -> None:
         scripted = [True] * 21
         state = {"i": 0}
 
@@ -986,7 +982,6 @@ class TestRunEvalAdaptive:
             state["i"] += count
             return _runs(*chunk)
 
-        monkeypatch.setattr(binom_eval.grading, "run_claude_batch", fake_batch)
         runs = binom_eval.run_eval_adaptive(
             {"id": "t", "prompt": "p"},
             Path("."),
@@ -996,6 +991,8 @@ class TestRunEvalAdaptive:
             checks=[_skill_check],
             min_trials=8,
             model="m",
+            runner=binom_eval.ClaudeRunner(),
+            batch_runner=fake_batch,
         )
         assert len(runs) == 8
 

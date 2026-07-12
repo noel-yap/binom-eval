@@ -2,7 +2,7 @@
 
 The I/O layer of the harness: it is the only package that spawns
 subprocesses and scrubs the environment. A `Runner` is a single live call;
-`run_claude_batch` overlaps `count` independent calls for one eval to
+`run_eval_batch` overlaps `count` independent calls for one eval to
 measure the model's run-to-run variance. Evals are non-deterministic, so
 nothing here caches — every trial is a fresh invocation.
 
@@ -361,43 +361,7 @@ def resolve_runner(spec: str | None) -> tuple[str, str, Runner]:
     return backend, model, BACKENDS[backend]()
 
 
-# Shared default backend and thin module-level shims. The `claude -p` logic
-# now lives on `ClaudeRunner`; these wrappers preserve the historical
-# function-level API so existing callers keep working.
-_default_runner: Runner = ClaudeRunner()
-
-
-def cli_version() -> str:
-    """Return the `claude` CLI version string, or '' when not on PATH."""
-    return _default_runner.version()
-
-
-def validate_model(model: str, timeout: int = 30) -> str | None:
-    """Confirm the `claude` CLI can use `model`; return an error or None."""
-    return _default_runner.validate_model(model, timeout)
-
-
-def run_claude(
-    prompt: str,
-    repo_root: Path,
-    skill_name: str,
-    timeout: int = DEFAULT_TIMEOUT_SECONDS,
-    *,
-    isolate: bool = False,
-    model: str,
-) -> EvalRun:
-    """Invoke `claude -p` once and parse its stream-json output."""
-    return _default_runner.run(
-        prompt,
-        repo_root,
-        skill_name,
-        timeout,
-        isolate=isolate,
-        model=model,
-    )
-
-
-def run_claude_batch(
+def run_eval_batch(
     item: dict[str, Any],
     repo_root: Path,
     skill_name: str,
@@ -406,7 +370,7 @@ def run_claude_batch(
     gate: threading.Semaphore | None = None,
     isolate: bool = False,
     model: str,
-    runner: Runner | None = None,
+    runner: Runner,
 ) -> list[EvalRun]:
     """Run one eval `count` times against `runner`, concurrently.
 
@@ -420,10 +384,10 @@ def run_claude_batch(
     concurrently-running evals caps total live calls at its count. `isolate`
     is forwarded to the runner so each trial runs in its own throwaway copy of
     `repo_root` when set. `model` selects the specific model used for all
-    trials in the batch. `runner` selects the backend; it defaults to the
-    shared `claude -p` runner so historical callers keep working.
+    trials in the batch. `runner` is the backend every trial runs against;
+    it is backend-agnostic (`ClaudeRunner`, `CursorRunner`, ...).
     """
-    backend = runner if runner is not None else _default_runner
+    backend = runner
     eid = item["id"]
     prompt = item["prompt"]
     prompt_input = item.get("prompt_input", "")
@@ -454,12 +418,9 @@ __all__ = [
     "ClaudeRunner",
     "CursorRunner",
     "Runner",
-    "cli_version",
     "fake_home_env",
     "isolated_workdir",
     "resolve_runner",
-    "run_claude",
-    "run_claude_batch",
+    "run_eval_batch",
     "stripped_env",
-    "validate_model",
 ]
