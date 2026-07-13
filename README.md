@@ -266,3 +266,14 @@ make help        # list all targets
 `make` wraps `uv`; a fresh checkout needs only `make test`. Override pytest
 args with `ARGS`, e.g. `make test ARGS="-k grading"`. The equivalent without
 make is `uv sync && uv run pytest -m 'not live_eval'`.
+
+To cut a release once your changes are on `main`:
+
+```bash
+make release-dry   # preview the next version, no tag
+make release       # infer the bump from commits, tag, and push
+```
+
+The version is derived from the git tag (`hatch-vcs`) — no manifest to bump.
+Pushing the tag publishes the GitHub Release automatically. See the
+**Releasing** section in [`AGENT.md`](AGENT.md) for the full flow.

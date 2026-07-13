@@ -46,6 +46,38 @@ check, for calibrating the target rate and pass threshold.
 per-trial detail -- the posterior summary plus every trial's sections
 (assistant reply, tool uses, or the handler's `assert_check` sections).
 
+## Releasing
+
+The package version is **derived from the git tag** via `hatch-vcs`
+(`pyproject.toml` declares `dynamic = ["version"]` + `[tool.hatch.version]
+source = "vcs"`). There is no version field to edit and no `chore(release)`
+bump commit — the tag is the single source of truth.
+
+```bash
+make release-dry              # preview the next version + notes, no tag
+make release                  # infer the bump from commits, tag, and push
+make release BUMP=minor       # force a level (major|minor|patch)
+make release BUMP=2.1.0       # or an explicit version
+```
+
+`scripts/release.sh` (what these targets run) verifies the tree is clean, on
+`main`, and in sync with the remote, then infers the bump from the Conventional
+Commits since the last tag (`type!:` / `BREAKING CHANGE:` → major, `feat` →
+minor, else patch — major stays 0 while pre-1.0), creates an annotated
+`vX.Y.Z` tag, and pushes it to `upstream` (falling back to `origin`). It does
+**not** merge anything — land your changes on `main` first.
+
+Pushing the tag triggers `.github/workflows/release.yml`, which builds the
+sdist + wheel (version resolved from the tag) and publishes the GitHub Release
+with auto-generated notes.
+
+> **Invariant:** a tag-triggered run uses `release.yml` **as it exists at the
+> tagged commit**. Any change to the release workflow must be merged to `main`
+> *before* you cut the next tag, or that release runs the old workflow. If a
+> release's automation fails, the git tag is still valid — build locally
+> (`uv build`) and publish by hand with
+> `gh release create vX.Y.Z --generate-notes dist/*`.
+
 ## Architecture
 
 `binom-eval` is a pytest plugin (`entry_points["pytest11"]`) for grading non-deterministic AI skill/agent evals with a Beta-binomial posterior. It is stdlib + pytest only — no scipy.
