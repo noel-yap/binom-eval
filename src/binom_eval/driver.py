@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from binom_eval.runner import Runner, run_eval_batch
+from binom_eval.runner import DEFAULT_TIMEOUT_SECONDS, Runner, run_eval_batch
 from binom_eval.stream_json import EvalRun
 from binom_eval.posterior import PASS_THRESHOLD, Verdict, _verdict, posterior_pass_prob
 from binom_eval.assertions import assert_check
 from binom_eval.reporting import graded_runs, trial_outcomes
+from binom_eval.progress import ProgressEvent, ProgressRenderer
 
 # Smallest batch to fire while a verdict is still open. Flooring the
 # optimistic shortfall keeps early rounds fanned out for concurrency and --
@@ -57,6 +59,33 @@ def _no_other_skill_check(skill_name: str) -> Callable[[EvalRun], None]:
             sections=sections,
         )
     return check
+
+
+def _eval_verdict(
+    runs: list[EvalRun],
+    checks: list[Callable[[EvalRun], None]],
+    target: float,
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
+) -> Verdict:
+    """Compute the overall eval verdict given the runs and checks so far.
+
+    Returns FAIL if any check has locked to FAIL; PASS if all checks have
+    locked to PASS; UNDETERMINED otherwise.
+    """
+    graded = graded_runs(runs)
+    trials_done = len(graded)
+    if trials_done == 0:
+        return Verdict.UNDETERMINED
+    all_pass = True
+    for check in checks:
+        passes = trials_done - _check_failures(graded, check)
+        v = _verdict(passes, trials_done, target, pass_threshold=pass_threshold)
+        if v is Verdict.FAIL:
+            return Verdict.FAIL
+        if v is Verdict.UNDETERMINED:
+            all_pass = False
+    return Verdict.PASS if all_pass else Verdict.UNDETERMINED
 
 
 def _eval_checks(
@@ -211,6 +240,8 @@ def run_eval_adaptive(
     isolate: bool = False,
     model: str,
     runner: Runner,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    on_progress: ProgressRenderer | None = None,
     batch_runner: Callable[..., list[EvalRun]] = run_eval_batch,
 ) -> list[EvalRun]:
     """Run trials in optimistic concurrent batches, stopping once the verdict
@@ -222,19 +253,23 @@ def run_eval_adaptive(
     runs and spends as few as `BATCH_FLOOR` when a clean streak settles every
     check, over however many rounds the outcomes require.
 
-    `gate`, `isolate`, `model`, and `runner` are forwarded to
+    `gate`, `isolate`, `model`, `runner`, and `timeout` are forwarded to
     `run_eval_batch`: the shared semaphore caps total live calls across this
     eval's batches and any other evals driven in parallel; `isolate` runs
     every trial in its own throwaway copy of `repo_root`; `model` selects the
     specific model used for all trials; `runner` is the backend every trial
     runs against (backend-agnostic -- `ClaudeRunner`, `CursorRunner`, ...).
+    `timeout` sets the per-trial subprocess deadline in seconds.
     Batches within one eval still run as sequential rounds (each round's
     verdict decides the next), so concurrency comes from the trials in a round
-    plus evals overlapping above this layer. `batch_runner` defaults to
-    `run_eval_batch` and exists so callers/tests can inject a different batch
-    executor.
+    plus evals overlapping above this layer. `on_progress` is an optional
+    progress renderer to report per-batch and completion events. `batch_runner`
+    defaults to `run_eval_batch` and exists so callers/tests can inject a
+    different batch executor.
     """
     runs: list[EvalRun] = []
+    batch_num = 0
+    eval_start = time.monotonic()
     batch = next_batch_size(
         runs,
         checks,
@@ -244,6 +279,8 @@ def run_eval_adaptive(
         min_trials=min_trials,
     )
     while batch > 0:
+        batch_num += 1
+        batch_start = time.monotonic()
         runs.extend(
             batch_runner(
                 item,
@@ -254,8 +291,27 @@ def run_eval_adaptive(
                 isolate=isolate,
                 model=model,
                 runner=runner,
+                timeout=timeout,
             )
         )
+        batch_elapsed = time.monotonic() - batch_start
+        total_elapsed = time.monotonic() - eval_start
+        if on_progress is not None:
+            on_progress.render(
+                ProgressEvent(
+                    kind="batch",
+                    eval_id=item["id"],
+                    batch_num=batch_num,
+                    batch_size=batch,
+                    trials_run=len(runs),
+                    trials_max=max_trials,
+                    batch_elapsed=batch_elapsed,
+                    total_elapsed=total_elapsed,
+                    verdict=_eval_verdict(
+                        runs, checks, target, pass_threshold=pass_threshold
+                    ),
+                )
+            )
         batch = next_batch_size(
             runs,
             checks,
@@ -263,5 +319,21 @@ def run_eval_adaptive(
             target,
             pass_threshold=pass_threshold,
             min_trials=min_trials,
+        )
+    if on_progress is not None:
+        on_progress.render(
+            ProgressEvent(
+                kind="eval_done",
+                eval_id=item["id"],
+                batch_num=0,
+                batch_size=0,
+                trials_run=len(runs),
+                trials_max=max_trials,
+                batch_elapsed=0.0,
+                total_elapsed=time.monotonic() - eval_start,
+                verdict=_eval_verdict(
+                    runs, checks, target, pass_threshold=pass_threshold
+                ),
+            )
         )
     return runs

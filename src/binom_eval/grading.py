@@ -57,3 +57,6 @@ from binom_eval.driver import (
     BATCH_FLOOR, _check_failures, _eval_checks, _no_other_skill_check,
     _resolve_shortfall, _trigger_check, next_batch_size, run_eval_adaptive,
 )
+from binom_eval.progress import (
+    ProgressEvent, ProgressRenderer, PlainRenderer, TtyRenderer, make_renderer,
+)

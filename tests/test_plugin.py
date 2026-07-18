@@ -16,6 +16,7 @@ from binom_eval import (
     DEFAULT_MAX_TRIALS,
     DEFAULT_MIN_TRIALS,
     DEFAULT_TARGET_RATE,
+    DEFAULT_TIMEOUT_SECONDS,
     plugin,
 )
 from binom_eval.stream_json import EvalRun
@@ -26,6 +27,7 @@ from binom_eval.grading import (
     PASS_THRESHOLD,
 )
 from binom_eval.plugin import (
+    DEFAULT_TRIAL_TIMEOUT,
     LIVE_EVAL_POSTERIOR_PROPERTY,
     make_eval_runs_fixture,
     pytest_addoption,
@@ -59,6 +61,7 @@ class TestPytestAddOption:
         assert "--live-eval-failure-max-chars" in options
         assert "--live-eval-verbose" in options
         assert "--live-eval-show-posterior" in options
+        assert "--live-eval-timeout" in options
 
     def test_max_trials_defaults_to_constant_and_is_int(self) -> None:
         opt = self._options()["--live-eval-max-trials"]
@@ -94,6 +97,14 @@ class TestPytestAddOption:
         opt = self._options()["--live-eval-show-posterior"]
         assert opt["default"] is False
         assert opt["action"] == "store_true"
+
+    def test_timeout_defaults_to_constant_and_is_int(self) -> None:
+        opt = self._options()["--live-eval-timeout"]
+        assert opt["default"] == DEFAULT_TRIAL_TIMEOUT
+        assert opt["type"] is int
+
+    def test_timeout_constant_matches_runner_default(self) -> None:
+        assert DEFAULT_TRIAL_TIMEOUT == DEFAULT_TIMEOUT_SECONDS
 
     def test_model_has_no_default_and_is_str(self) -> None:
         # No default: the `backend:` prefix is mandatory, so a live run must
@@ -135,6 +146,8 @@ class _StubConfig:
         model: str | None = "claude:haiku",
         pass_threshold: float = PASS_THRESHOLD,
         min_trials: int = DEFAULT_MIN_TRIALS,
+        progress: bool = False,
+        timeout: int = DEFAULT_TRIAL_TIMEOUT,
     ) -> None:
         self._options = {
             "--live-eval-max-trials": max_trials,
@@ -144,6 +157,8 @@ class _StubConfig:
             "--live-eval-concurrency": concurrency,
             "--live-eval-isolate": isolate,
             "--live-eval-model": model,
+            "--live-eval-progress": progress,
+            "--live-eval-timeout": timeout,
         }
         self.pluginmanager = _NullPluginManager()
 
@@ -302,6 +317,8 @@ class TestMakeEvalRunsFixture:
             isolate: bool = False,
             model: str,
             runner: Any = None,
+            timeout: int = DEFAULT_TRIAL_TIMEOUT,
+            on_progress: Any = None,
         ) -> list[EvalRun]:
             calls.append((item["id"], max_trials, target, pass_threshold))
             return [
@@ -356,6 +373,8 @@ class TestMakeEvalRunsFixture:
             isolate: bool = False,
             model: str,
             runner: Any = None,
+            timeout: int = DEFAULT_TRIAL_TIMEOUT,
+            on_progress: Any = None,
         ) -> list[EvalRun]:
             calls.append(pass_threshold)
             return [
@@ -403,6 +422,8 @@ class TestMakeEvalRunsFixture:
             isolate: bool = False,
             model: str,
             runner: Any = None,
+            timeout: int = DEFAULT_TRIAL_TIMEOUT,
+            on_progress: Any = None,
         ) -> list[EvalRun]:
             calls.append(min_trials)
             return [
@@ -416,6 +437,55 @@ class TestMakeEvalRunsFixture:
 
         self._fixture_fn(run_adaptive=fake_adaptive)(
             _StubConfig(21, 2.0 / 3.0, min_trials=custom)
+        )
+
+        assert calls == [custom]
+
+    def test_forwards_custom_timeout_to_adaptive(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            plugin,
+            "resolve_runner",
+            lambda _spec: ("claude", "m", _FakeRunner()),
+        )
+        monkeypatch.setattr(
+            plugin,
+            "load_evals",
+            lambda _path, _handlers: [{"id": "e1", "assertions": []}],
+        )
+        custom = 60
+        calls: list[int] = []
+
+        def fake_adaptive(
+            item: dict[str, Any],
+            repo_root: Path,
+            skill_name: str,
+            max_trials: int,
+            target: float,
+            checks: list[Any],
+            *,
+            pass_threshold: float = PASS_THRESHOLD,
+            min_trials: int = 0,
+            gate: Any = None,
+            isolate: bool = False,
+            model: str,
+            runner: Any = None,
+            timeout: int = DEFAULT_TRIAL_TIMEOUT,
+            on_progress: Any = None,
+        ) -> list[EvalRun]:
+            calls.append(timeout)
+            return [
+                EvalRun(
+                    eval_id=item["id"],
+                    prompt="",
+                    skill_invoked=False,
+                    assistant_text="",
+                )
+            ]
+
+        self._fixture_fn(run_adaptive=fake_adaptive)(
+            _StubConfig(21, 2.0 / 3.0, timeout=custom)
         )
 
         assert calls == [custom]

@@ -371,6 +371,7 @@ def run_eval_batch(
     isolate: bool = False,
     model: str,
     runner: Runner,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> list[EvalRun]:
     """Run one eval `count` times against `runner`, concurrently.
 
@@ -386,6 +387,8 @@ def run_eval_batch(
     `repo_root` when set. `model` selects the specific model used for all
     trials in the batch. `runner` is the backend every trial runs against;
     it is backend-agnostic (`ClaudeRunner`, `CursorRunner`, ...).
+    `timeout` sets the per-trial subprocess deadline in seconds; defaults to
+    `DEFAULT_TIMEOUT_SECONDS`.
     """
     backend = runner
     eid = item["id"]
@@ -398,7 +401,7 @@ def run_eval_batch(
     def one(_: int) -> EvalRun:
         with limit:
             return backend.run(
-                prompt, repo_root, skill_name, isolate=isolate, model=model
+                prompt, repo_root, skill_name, timeout, isolate=isolate, model=model
             )
 
     with ThreadPoolExecutor(max_workers=count) as pool:
