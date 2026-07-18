@@ -90,7 +90,8 @@ with auto-generated notes.
 | `assertions.py` | Assertion protocol: `AssertionFailure`, `assert_check`, and single-trial `evaluate_check` |
 | `loading.py` | `evals.json` loading/expansion: `load_evals`, `expand_evals`, `assert_handler_coverage` |
 | `reporting.py` | Grading rollups + pytest rendering: `trial_outcomes`, `failing_assertions`, `format_posterior_summary`, and the verbose/failure messages |
-| `driver.py` | Adaptive trial driver: `run_eval_adaptive`, `next_batch_size`; the batch executor is an injectable `batch_runner` (defaults to `run_eval_batch`) |
+| `progress.py` | Progress output: `ProgressEvent` dataclass, `ProgressRenderer` protocol, `TtyRenderer`/`PlainRenderer` strategies, `make_renderer` factory (selects TTY vs plain at construction time) |
+| `driver.py` | Adaptive trial driver: `run_eval_adaptive`, `next_batch_size`; the batch executor is an injectable `batch_runner` (defaults to `run_eval_batch`); optional `on_progress` renderer for per-batch and per-eval events |
 | `grading.py` | Backward-compatible facade re-exporting every name from the five modules above (kept so existing `binom_eval.grading` imports still resolve) |
 | `plugin.py` | pytest integration: `--live-eval-*` CLI options, `live_eval` marker, `make_eval_runs_fixture` |
 | `suite.py` | Thin consumer wiring: `bind_eval_runs_fixture` (for `conftest.py`) and `register_live_eval_tests` (for `test_evals.py`) |
