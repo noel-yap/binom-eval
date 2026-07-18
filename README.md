@@ -125,8 +125,8 @@ uv add "binom-eval @ git+https://github.com/noel-yap/binom-eval"
 Installing registers a pytest plugin, so the `--live-eval-target-rate`,
 `--live-eval-pass-threshold`, `--live-eval-min-trials`, `--live-eval-max-trials`,
 `--live-eval-concurrency`, `--live-eval-isolate`, `--live-eval-model`,
-`--live-eval-failure-max-chars`, `--live-eval-show-posterior`, and
-`--live-eval-verbose`
+`--live-eval-failure-max-chars`, `--live-eval-show-posterior`,
+`--live-eval-verbose`, `--live-eval-timeout`, and `--live-eval-progress`
 options and the
 `live_eval` marker become available to your test suite with no extra wiring. Live evals require the `claude` CLI on
 `PATH`; when it's absent the fixture skips rather than fails.
@@ -205,6 +205,10 @@ pytest path/to/evals -m live_eval \
 # select a specific model (default: haiku):
 pytest path/to/evals -m live_eval \
     --live-eval-model claude-sonnet-4-6
+# tighten the per-trial deadline (default 300 s) for fast models or CI:
+pytest path/to/evals -m live_eval --live-eval-timeout 60
+# print per-batch progress to stderr while the suite runs:
+pytest path/to/evals -m live_eval --live-eval-progress
 ```
 
 An unknown model is rejected before any trial runs. For the `claude` backend

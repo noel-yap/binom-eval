@@ -25,7 +25,8 @@ from binom_eval.grading import (
     load_evals,
     run_eval_adaptive,
 )
-from binom_eval.runner import resolve_runner
+from binom_eval.progress import make_renderer
+from binom_eval.runner import DEFAULT_TIMEOUT_SECONDS, resolve_runner
 from binom_eval.stream_json import EvalRun
 
 # Budget ceiling: the most trials any single eval will ever run. A verdict
@@ -48,6 +49,10 @@ DEFAULT_MIN_TRIALS = 0
 # finish faster when the API and machine can take it; drop it to 1 to run
 # fully serially.
 DEFAULT_CONCURRENCY = 5
+
+# Per-trial subprocess deadline in seconds. Covers all retry attempts combined
+# (the RetryPolicy shares one deadline across retries).
+DEFAULT_TRIAL_TIMEOUT = DEFAULT_TIMEOUT_SECONDS
 
 # The true pass rate a good skill should clear. The verdict asks how much
 # posterior mass sits at or above this. 3/5 ("passes at least three of every
@@ -263,6 +268,28 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "--live-eval-verbose for full per-trial detail."
         ),
     )
+    parser.addoption(
+        "--live-eval-timeout",
+        action="store",
+        type=int,
+        default=DEFAULT_TRIAL_TIMEOUT,
+        help=(
+            "Per-trial subprocess deadline in seconds. All retry attempts "
+            "for a single trial share this budget, so the effective wall "
+            "time per trial is at most this value. "
+            f"Default {DEFAULT_TRIAL_TIMEOUT}."
+        ),
+    )
+    parser.addoption(
+        "--live-eval-progress",
+        action="store_true",
+        default=False,
+        help=(
+            "Print per-batch progress to stderr during live evals. "
+            "Output uses carriage-return overwrite on a TTY and plain "
+            "newlines in CI/non-TTY environments."
+        ),
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -356,6 +383,9 @@ def make_eval_runs_fixture(
             )
         concurrency = pytestconfig.getoption("--live-eval-concurrency")
         isolate = pytestconfig.getoption("--live-eval-isolate")
+        timeout = pytestconfig.getoption("--live-eval-timeout")
+        progress_enabled = pytestconfig.getoption("--live-eval-progress")
+        renderer = make_renderer() if progress_enabled else None
         model_error = runner.validate_model(model)
         if model_error is not None:
             pytest.fail(
@@ -380,6 +410,8 @@ def make_eval_runs_fixture(
                 isolate=isolate,
                 model=model,
                 runner=runner,
+                timeout=timeout,
+                on_progress=renderer,
             )
 
         # Drive the evals concurrently; the shared `gate` -- not the worker
