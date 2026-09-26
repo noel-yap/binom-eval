@@ -106,7 +106,9 @@ with auto-generated notes.
 - PASS once `p_good > PASS_THRESHOLD` (≈0.865), FAIL once `p_good < FAIL_THRESHOLD` (≈0.135);
   the PASS edge is overridable per run via `--live-eval-pass-threshold`.
 - Adaptive: `next_batch_size` computes the optimistic shortfall per undetermined check, floors at `BATCH_FLOOR=3`, caps at remaining budget.
-- Budget tiebreak at `p_good >= 0.5` if `MAX_TRIALS` exhausted inside the band.
+- No separate tiebreak: `eval_passed` grades on the same `pass_threshold` as
+  the verdict band's PASS edge, so a check that exhausts `MAX_TRIALS` still
+  inside the band grades FAIL.
 - Errored trials (`EvalRun.errored`: CLI died, `is_error` result event, retries exhausted — see `TRIAL_RETRY` in `runner/`) are excluded from every posterior count via `graded_runs`, but still spend the trial budget.
 
 ### Consumer pattern (see `examples/`)

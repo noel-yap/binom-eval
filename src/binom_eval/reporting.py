@@ -100,11 +100,16 @@ def trial_outcomes(
 
 
 def trial_outcomes_passed(
-    outcomes: list[tuple[int, str | None]], target: float
+    outcomes: list[tuple[int, str | None]],
+    target: float,
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
 ) -> bool:
     """True when trial outcomes clear the posterior bar at ``target``."""
     passes = sum(1 for _, err in outcomes if err is None)
-    return eval_passed(passes, len(outcomes), target)
+    return eval_passed(
+        passes, len(outcomes), target, pass_threshold=pass_threshold
+    )
 
 
 def format_posterior_summary(
@@ -199,6 +204,7 @@ def trial_outcomes_failure_message(
     target: float,
     label: str,
     *,
+    pass_threshold: float = PASS_THRESHOLD,
     max_chars: int = FAILURE_SECTION_MAX_CHARS,
 ) -> str:
     """Human-readable failure detail for ``trial_outcomes_passed``.
@@ -220,8 +226,10 @@ def trial_outcomes_failure_message(
     if not trials:
         detail = "  (no gradable trials: every trial errored)"
     return (
-        format_posterior_summary(label, passes, trials, target)
-        + " (need >= 0.5).\nFailing trials:\n"
+        format_posterior_summary(
+            label, passes, trials, target, pass_threshold=pass_threshold
+        )
+        + f" (need p_good > {pass_threshold:.3f}).\nFailing trials:\n"
         + detail
     )
 
@@ -231,6 +239,8 @@ def failing_assertions(
     assertions: list[dict[str, Any]],
     handlers: dict[str, Callable[[EvalRun], None]],
     target: float,
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
 ) -> list[tuple[str, int, int, float]]:
     """For one eval's runs, the assertions whose posterior fails the bar.
 
@@ -251,7 +261,7 @@ def failing_assertions(
         passes = sum(
             1 for _, err in trial_outcomes(runs, handler) if err is None
         )
-        if not eval_passed(passes, trials, target):
+        if not eval_passed(passes, trials, target, pass_threshold=pass_threshold):
             p_good = posterior_pass_prob(passes, trials, target)
             failing.append((assertion["id"], passes, trials, p_good))
     return failing

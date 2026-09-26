@@ -151,14 +151,19 @@ class TestVerdict:
 
 
 class TestEvalPassed:
-    """The final grade: posterior majority above the bar."""
+    """The final grade: posterior must clear pass_threshold."""
 
-    def test_passes_when_majority_mass_above_bar(self) -> None:
-        assert eval_passed(3, 3, TARGET) is True  # p_good ~0.80
+    def test_passes_when_posterior_clears_pass_threshold(self) -> None:
+        assert eval_passed(6, 6, TARGET) is True  # p_good ~0.94
 
-    def test_fails_when_majority_mass_below_bar(self) -> None:
+    def test_fails_when_posterior_does_not_clear_pass_threshold(self) -> None:
         assert eval_passed(2, 3, TARGET) is False
         assert eval_passed(4, 6, TARGET) is False
+
+    def test_custom_pass_threshold_tightens_the_grade(self) -> None:
+        # 6/6 passes the default bar but not a much tighter one.
+        assert eval_passed(6, 6, TARGET) is True
+        assert eval_passed(6, 6, TARGET, pass_threshold=0.99) is False
 
 
 class TestTriggerCheck:
@@ -238,9 +243,9 @@ class TestErroredRunExclusion:
         assert next_batch_size(runs, [_skill_check], 21, TARGET) == 1
 
     def test_failing_assertions_counts_only_graded_trials(self) -> None:
-        # 3/3 graded passes clears the bar; the errored trials must not be
-        # read as failures that drag p_good under 0.5.
-        runs = _runs(True, True, True) + [_errored_run(), _errored_run()]
+        # 6/6 graded passes clears the bar; the errored trials must not be
+        # read as failures that drag p_good below pass_threshold.
+        runs = _runs(*([True] * 6)) + [_errored_run(), _errored_run()]
         handlers = {"skill": _skill_check}
         assertions = [{"id": "skill"}]
         assert failing_assertions(runs, assertions, handlers, TARGET) == []
@@ -262,8 +267,8 @@ class TestErroredRunExclusion:
 
 class TestTrialOutcomesGrading:
     def test_passes_when_posterior_clears_bar(self) -> None:
-        # 3 of 3 passes -> p_good ~0.80 >= 0.5.
-        outcomes = [(0, None), (1, None), (2, None)]
+        # 6 of 6 passes -> p_good ~0.94, clears PASS_THRESHOLD.
+        outcomes = [(i, None) for i in range(6)]
         assert trial_outcomes_passed(outcomes, TARGET), (
             trial_outcomes_failure_message(outcomes, TARGET, "x")
         )
@@ -287,6 +292,13 @@ class TestTrialOutcomesGrading:
             assert trial_outcomes_passed(outcomes, TARGET), (
                 trial_outcomes_failure_message(outcomes, TARGET, "x")
             )
+
+    def test_failure_message_reports_custom_pass_threshold(self) -> None:
+        outcomes = [(0, TrialFailure("bad")), (1, TrialFailure("bad"))]
+        message = trial_outcomes_failure_message(
+            outcomes, TARGET, "x", pass_threshold=0.5
+        )
+        assert "(need p_good > 0.500)" in message
 
     def test_posterior_summary_reports_rate_and_counts(self) -> None:
         outcomes = [(0, None), (1, None), (2, None)]
@@ -572,10 +584,24 @@ class TestFailingAssertions:
         return {"a": self._skill, "b": self._text}
 
     def test_empty_when_all_clear_bar(self) -> None:
-        runs = _runs(True, True, True)  # 3/3 -> p_good ~0.80
+        runs = _runs(*([True] * 6))  # 6/6 -> p_good ~0.94
         assertions = [{"id": "a"}]
         assert (
             failing_assertions(runs, assertions, self._handlers(), TARGET)
+            == []
+        )
+
+    def test_custom_pass_threshold_changes_which_assertions_fail(self) -> None:
+        # 3/3 invocations: p_good(3, 3, TARGET) ~= 0.8025 at TARGET = 2/3,
+        # below the default PASS_THRESHOLD (~0.8647) but above a looser 0.7.
+        runs = _runs(True, True, True)
+        assertions = [{"id": "a"}]
+        handlers = self._handlers()
+        assert failing_assertions(runs, assertions, handlers, TARGET) != []
+        assert (
+            failing_assertions(
+                runs, assertions, handlers, TARGET, pass_threshold=0.7
+            )
             == []
         )
 

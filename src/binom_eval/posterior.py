@@ -158,14 +158,20 @@ def _verdict(
     return Verdict.UNDETERMINED
 
 
-def eval_passed(passes: int, trials: int, target: float) -> bool:
+def eval_passed(
+    passes: int,
+    trials: int,
+    target: float,
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
+) -> bool:
     """Final pass/fail grade for a completed batch of runs.
 
-    The verdict band decides *when to stop*; this decides the *grade* once
-    stopping has happened. A PASS-locked run has ``p_good > PASS_THRESHOLD``
-    and a FAIL-locked run has ``p_good < FAIL_THRESHOLD``, so grading on
-    ``p_good >= 1/2`` agrees with both; the only case it newly resolves is a
-    run that exhausted `MAX_TRIALS` still inside the band, which it breaks
-    toward whichever side holds the majority of the posterior.
+    Uses the same ``pass_threshold`` as the verdict band's PASS edge: a
+    PASS-locked run already has ``p_good > pass_threshold`` and a
+    FAIL-locked run already has ``p_good < 1 - pass_threshold``, so this
+    agrees with both. The only case it newly decides is a run that
+    exhausted `MAX_TRIALS` still inside the band -- that now grades FAIL
+    rather than falling back to a looser ``p_good >= 0.5`` tiebreak.
     """
-    return posterior_pass_prob(passes, trials, target) >= 0.5
+    return posterior_pass_prob(passes, trials, target) > pass_threshold

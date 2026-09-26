@@ -178,7 +178,7 @@ def _passing_runs() -> dict[str, list[EvalRun]]:
                 skill_invoked=True,
                 assistant_text="ok",
             )
-            for _ in range(3)
+            for _ in range(6)
         ]
     }
 
@@ -329,7 +329,7 @@ def test_assertion_test_records_verbose_detail_when_enabled(
     assert len(request.node.user_properties) == 1
     name, summary = request.node.user_properties[0]
     assert name == LIVE_EVAL_POSTERIOR_PROPERTY
-    assert summary.startswith("positive::checks-out: 3/3 trials passed;")
+    assert summary.startswith("positive::checks-out: 6/6 trials passed;")
     assert "Trials:" in summary
     assert "trial 0: passed" in summary
     assert "Input:" in summary
@@ -358,7 +358,7 @@ def test_assertion_test_records_posterior_only_when_show_posterior_enabled(
 
     assert len(request.node.user_properties) == 1
     _, summary = request.node.user_properties[0]
-    assert summary.startswith("positive::checks-out: 3/3 trials passed;")
+    assert summary.startswith("positive::checks-out: 6/6 trials passed;")
     assert "Trials:" not in summary
 
 
@@ -427,7 +427,7 @@ def test_expectation_test_records_posterior_per_assertion(
 
     assert len(request.node.user_properties) == 1
     _, summary = request.node.user_properties[0]
-    assert summary.startswith("positive::checks-out: 3/3 trials passed;")
+    assert summary.startswith("positive::checks-out: 6/6 trials passed;")
     assert "Trials:" in summary
 
 
@@ -449,7 +449,7 @@ def test_trigger_test_records_posterior_per_eval(
 
     assert len(request.node.user_properties) == 1
     _, summary = request.node.user_properties[0]
-    assert summary.startswith("positive: 3/3 trials passed;")
+    assert summary.startswith("positive: 6/6 trials passed;")
     assert "Trials:" in summary
     assert "trial 0: passed" in summary
     assert "Assistant reply:" in summary

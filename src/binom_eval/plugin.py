@@ -185,8 +185,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help=(
             "Target true pass rate a good skill should clear "
             f"(default {DEFAULT_TARGET_RATE:.4f}). The verdict asks how much "
-            "posterior mass sits at or above this rate; final grading still "
-            "uses the p_good >= 0.5 tiebreak once the trial budget is spent."
+            "posterior mass sits at or above this rate; final grading uses "
+            "the same pass_threshold as the verdict band, so a check that "
+            "exhausts the trial budget still inside the band grades FAIL."
         ),
     )
     parser.addoption(
