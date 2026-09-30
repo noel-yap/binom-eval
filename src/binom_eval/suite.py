@@ -212,7 +212,11 @@ def register_live_eval_tests(
         handler = handlers[assertion_id]
         outcomes = trial_outcomes(eval_runs[eval_id], handler)
         label = f"{eval_id}::{assertion_id}"
-        passed = trial_outcomes_passed(outcomes, live_eval_target_rate)
+        passed = trial_outcomes_passed(
+            outcomes,
+            live_eval_target_rate,
+            pass_threshold=live_eval_pass_threshold,
+        )
         if passed and (live_eval_verbose or live_eval_show_posterior):
             summary = _pass_summary(
                 eval_runs[eval_id],
@@ -230,6 +234,7 @@ def register_live_eval_tests(
                 outcomes,
                 live_eval_target_rate,
                 label,
+                pass_threshold=live_eval_pass_threshold,
                 max_chars=live_eval_failure_max_chars,
             )
         )
@@ -252,6 +257,7 @@ def register_live_eval_tests(
             ev["assertions"],
             handlers,
             live_eval_target_rate,
+            pass_threshold=live_eval_pass_threshold,
         )
         if not failing and (live_eval_verbose or live_eval_show_posterior):
             for assertion in ev["assertions"]:
@@ -271,7 +277,8 @@ def register_live_eval_tests(
                 record_live_eval_posterior(request.node, summary)
         assert not failing, (
             f"{eval_id}: {len(failing)} assertion(s) below the bar "
-            f"(P(θ ≥ {live_eval_target_rate:.3f}) must be >= 0.5):\n"
+            f"(P(θ ≥ {live_eval_target_rate:.3f}) must exceed "
+            f"{live_eval_pass_threshold:.3f}):\n"
             + "\n".join(
                 f"  - {aid}: {n}/{total} passed, p_good={p:.3f}"
                 for aid, n, total, p in failing
@@ -295,7 +302,12 @@ def register_live_eval_tests(
             failures = [
                 (eid, n, total)
                 for eid, n, total in counts
-                if not eval_passed(n, total, live_eval_target_rate)
+                if not eval_passed(
+                    n,
+                    total,
+                    live_eval_target_rate,
+                    pass_threshold=live_eval_pass_threshold,
+                )
             ]
             if not failures and (live_eval_verbose or live_eval_show_posterior):
                 _record_count_posteriors(
@@ -310,7 +322,8 @@ def register_live_eval_tests(
                 )
             assert not failures, (
                 f"{subject_name} invoked below the bar "
-                f"(P(θ ≥ {live_eval_target_rate:.3f}) must be >= 0.5): "
+                f"(P(θ ≥ {live_eval_target_rate:.3f}) must exceed "
+                f"{live_eval_pass_threshold:.3f}): "
                 + ", ".join(f"{eid}: {n}/{total}" for eid, n, total in failures)
             )
 
@@ -334,7 +347,12 @@ def register_live_eval_tests(
             failures = [
                 (eid, n, total)
                 for eid, n, total in counts
-                if not eval_passed(n, total, live_eval_target_rate)
+                if not eval_passed(
+                    n,
+                    total,
+                    live_eval_target_rate,
+                    pass_threshold=live_eval_pass_threshold,
+                )
             ]
             if not failures and (live_eval_verbose or live_eval_show_posterior):
                 _record_count_posteriors(
@@ -349,7 +367,8 @@ def register_live_eval_tests(
                 )
             assert not failures, (
                 f"{subject_name} agent invoked below the bar "
-                f"(P(θ ≥ {live_eval_target_rate:.3f}) must be >= 0.5): "
+                f"(P(θ ≥ {live_eval_target_rate:.3f}) must exceed "
+                f"{live_eval_pass_threshold:.3f}): "
                 + ", ".join(f"{eid}: {n}/{total}" for eid, n, total in failures)
             )
 
