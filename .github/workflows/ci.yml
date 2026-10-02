@@ -60,25 +60,3 @@ jobs:
 
       - name: Compare coverage with base
         run: make coverage-compare BASE=origin/${{ github.base_ref }}
-
-  # Per-file coverage ratchet: coverage of every src file changed in the PR
-  # must not drop below what the base branch has. The baseline is computed
-  # on the fly from the base commit, so there is no threshold file to maintain.
-  coverage:
-    name: coverage vs. base
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Compare coverage with base
-        run: make coverage-compare BASE=origin/${{ github.base_ref }}

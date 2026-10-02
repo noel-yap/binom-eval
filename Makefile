@@ -5,7 +5,6 @@
 ARGS ?=
 BUMP ?=
 BASE ?= origin/main
-BASE ?= origin/main
 
 .DEFAULT_GOAL := test
 
@@ -31,17 +30,6 @@ coverage: sync ## Run the fast unit suite and report coverage (terminal + htmlco
 	uv run coverage run --source=binom_eval -m pytest -m 'not live_eval' $(ARGS)
 	uv run coverage report --show-missing
 	uv run coverage html
-
-coverage-compare: sync ## Fail if coverage of files changed vs BASE (default origin/main) decreased
-	rm -rf $(CURDIR)/.cov-base && git worktree prune
-	git worktree add --detach $(CURDIR)/.cov-base $(BASE)
-	cd .cov-base && uv run --with coverage coverage run --source=binom_eval -m pytest -m 'not live_eval' -q \
-		&& uv run --with coverage coverage json -o ../.coverage-base.json
-	uv run coverage run --source=binom_eval -m pytest -m 'not live_eval' -q
-	uv run coverage json -o .coverage-head.json
-	python3 scripts/coverage_compare.py .coverage-base.json .coverage-head.json \
-		$$(git diff --name-only --diff-filter=AM $(BASE)...HEAD -- src)
-	git worktree remove --force .cov-base
 
 coverage-compare: sync ## Fail if coverage of src files changed vs BASE (default origin/main) decreased
 	@files=$$(git diff --name-only --diff-filter=AM $(BASE)...HEAD -- 'src/*.py' | paste -sd, -); \
