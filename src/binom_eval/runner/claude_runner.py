@@ -204,6 +204,7 @@ class ClaudeRunner(Runner):
         timeout: int = DEFAULT_TIMEOUT_SECONDS,
         *,
         isolate: bool = False,
+        isolate_skill: tuple[Path, ...] | None = None,
         model: str,
     ) -> EvalRun:
         """Invoke `claude -p` once and parse its stream-json output.
@@ -211,7 +212,8 @@ class ClaudeRunner(Runner):
         With `isolate=True` the call runs in a throwaway copy of `repo_root`
         (see `isolated_workdir`) so a skill that writes to the tree cannot
         affect `repo_root` or a concurrent run; otherwise it runs in
-        `repo_root` directly. `model` is assumed to be set and is always
+        `repo_root` directly. `isolate_skill` narrows the copy to the evaluated
+        skill's directory, excluding sibling skills. `model` is assumed to be set and is always
         forwarded as `--model` so callers select a specific model for eval runs
         without relying on the CLI default. The run executes under a throwaway
         `HOME` (`fake_home_env`) -- on top of `--setting-sources project` and
@@ -245,7 +247,7 @@ class ClaudeRunner(Runner):
         ]
         def attempt(remaining: float, last_error: list[str]) -> EvalRun:
             with (
-                isolated_workdir(repo_root, isolate) as workdir,
+                isolated_workdir(repo_root, isolate, isolate_skill) as workdir,
                 fake_home_env() as env,
             ):
                 proc = _spawn_checked(

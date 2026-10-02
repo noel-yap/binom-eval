@@ -238,6 +238,7 @@ def run_eval_adaptive(
     min_trials: int = 0,
     gate: threading.Semaphore | None = None,
     isolate: bool = False,
+    isolate_skill: tuple[Path, ...] | None = None,
     model: str,
     runner: Runner,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
@@ -253,10 +254,12 @@ def run_eval_adaptive(
     runs and spends as few as `BATCH_FLOOR` when a clean streak settles every
     check, over however many rounds the outcomes require.
 
-    `gate`, `isolate`, `model`, `runner`, and `timeout` are forwarded to
+    `gate`, `isolate`, `isolate_skill`, `model`, `runner`, and `timeout` are
+    forwarded to
     `run_eval_batch`: the shared semaphore caps total live calls across this
     eval's batches and any other evals driven in parallel; `isolate` runs
-    every trial in its own throwaway copy of `repo_root`; `model` selects the
+    every trial in its own throwaway copy of `repo_root` (`isolate_skill`
+    limits that copy to the evaluated skill); `model` selects the
     specific model used for all trials; `runner` is the backend every trial
     runs against (backend-agnostic -- `ClaudeRunner`, `CursorRunner`, ...).
     `timeout` sets the per-trial subprocess deadline in seconds.
@@ -278,6 +281,9 @@ def run_eval_adaptive(
         pass_threshold=pass_threshold,
         min_trials=min_trials,
     )
+    # Forwarded only when set, so an injected `batch_runner` written before
+    # `isolate_skill` existed keeps working.
+    extra = {} if isolate_skill is None else {"isolate_skill": isolate_skill}
     while batch > 0:
         batch_num += 1
         batch_start = time.monotonic()
@@ -292,6 +298,7 @@ def run_eval_adaptive(
                 model=model,
                 runner=runner,
                 timeout=timeout,
+                **extra,
             )
         )
         batch_elapsed = time.monotonic() - batch_start

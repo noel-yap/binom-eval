@@ -4,10 +4,11 @@
 
 ARGS ?=
 BUMP ?=
+BASE ?= origin/main
 
 .DEFAULT_GOAL := test
 
-.PHONY: help sync test test-all test-live example clean release release-dry
+.PHONY: help sync test test-all test-live coverage coverage-compare example clean release release-dry
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -25,6 +26,23 @@ test-all: sync ## Run every test, including live evals (needs `claude` on PATH)
 test-live: sync ## Run only the live evals (needs `claude` on PATH)
 	uv run pytest -m live_eval $(ARGS)
 
+coverage: sync ## Run the fast unit suite and report coverage (terminal + htmlcov/)
+	uv run coverage run --source=binom_eval -m pytest -m 'not live_eval' $(ARGS)
+	uv run coverage report --show-missing
+	uv run coverage html
+
+coverage-compare: sync ## Fail if coverage of src files changed vs BASE (default origin/main) decreased
+	@files=$$(git diff --name-only --diff-filter=AM $(BASE)...HEAD -- 'src/*.py' | paste -sd, -); \
+	if [ -z "$$files" ]; then echo "No changed src files."; exit 0; fi; \
+	set -e; rm -rf .cov-base; git worktree prune; \
+	git worktree add --detach .cov-base $(BASE); \
+	trap 'git worktree remove --force .cov-base' EXIT; \
+	(cd .cov-base && uv run --with coverage coverage run --include="$$files" -m pytest -m 'not live_eval' -q \
+		&& uv run --with coverage coverage json -o ../.coverage-base.json); \
+	uv run coverage run --include="$$files" -m pytest -m 'not live_eval' -q; \
+	uv run coverage json -o .coverage-head.json; \
+	python3 scripts/coverage_compare.py .coverage-base.json .coverage-head.json $$(echo "$$files" | tr , ' ')
+
 example: sync ## Run the bundled example eval suite (needs `claude` on PATH)
 	uv run pytest examples/example-skill/evals -m live_eval $(ARGS)
 
@@ -35,5 +53,5 @@ release: ## Tag+push a release (infers bump; BUMP=major|minor|patch|X.Y.Z overri
 	./scripts/release.sh $(BUMP)
 
 clean: ## Remove caches and build artifacts
-	rm -rf .pytest_cache build dist *.egg-info
+	rm -rf .pytest_cache .coverage .coverage-base.json .coverage-head.json htmlcov build dist *.egg-info
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

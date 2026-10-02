@@ -938,6 +938,7 @@ class TestRunEvalAdaptive:
             *,
             gate: object = None,
             isolate: bool = False,
+            isolate_skill: tuple[Path, ...] | None = None,
             model: str,
             runner: object = None,
             timeout: int = 300,
@@ -962,6 +963,69 @@ class TestRunEvalAdaptive:
         assert BATCH_FLOOR <= len(runs) < 21
         assert all(run.skill_invoked for run in runs)
 
+    def test_isolate_skill_forwarded_to_batch_runner_only_when_set(self) -> None:
+        # A `batch_runner` written before `isolate_skill` existed has no such
+        # parameter, so it is forwarded only when set.
+        seen: list[dict[str, object]] = []
+
+        def fake_batch(
+            item: dict,
+            repo_root: Path,
+            skill_name: str,
+            count: int,
+            **kwargs: object,
+        ) -> list[EvalRun]:
+            seen.append(kwargs)
+            return _runs(*([False] * count))
+
+        def drive(**extra: object) -> None:
+            binom_eval.run_eval_adaptive(
+                {"id": "t", "prompt": "p"},
+                Path("."),
+                "demo",
+                max_trials=21,
+                target=TARGET,
+                checks=[_skill_check],
+                model="m",
+                runner=binom_eval.ClaudeRunner(),
+                batch_runner=fake_batch,
+                **extra,
+            )
+
+        keep = (Path("skills/demo"),)
+        drive()
+        assert "isolate_skill" not in seen[-1]
+        drive(isolate=True, isolate_skill=keep)
+        assert seen[-1]["isolate_skill"] == keep
+
+    def test_batch_runner_without_isolate_skill_parameter_still_works(self) -> None:
+        def legacy_batch(
+            item: dict,
+            repo_root: Path,
+            skill_name: str,
+            count: int,
+            *,
+            gate: object = None,
+            isolate: bool = False,
+            model: str,
+            runner: object = None,
+            timeout: int = 300,
+        ) -> list[EvalRun]:
+            return _runs(*([False] * count))
+
+        runs = binom_eval.run_eval_adaptive(
+            {"id": "t", "prompt": "p"},
+            Path("."),
+            "demo",
+            max_trials=21,
+            target=TARGET,
+            checks=[_skill_check],
+            model="m",
+            runner=binom_eval.ClaudeRunner(),
+            batch_runner=legacy_batch,
+        )
+        assert len(runs) == BATCH_FLOOR
+
     def test_stops_fast_when_failing(self) -> None:
         # A skill that always misses: the opening floor of 3 FAIL-locks it.
         def fake_batch(
@@ -972,6 +1036,7 @@ class TestRunEvalAdaptive:
             *,
             gate: object = None,
             isolate: bool = False,
+            isolate_skill: tuple[Path, ...] | None = None,
             model: str,
             runner: object = None,
             timeout: int = 300,
@@ -1003,6 +1068,7 @@ class TestRunEvalAdaptive:
             *,
             gate: object = None,
             isolate: bool = False,
+            isolate_skill: tuple[Path, ...] | None = None,
             model: str,
             runner: object = None,
             timeout: int = 300,

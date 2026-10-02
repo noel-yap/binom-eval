@@ -37,7 +37,7 @@ Repository = "https://github.com/noel-yap/binom-eval"
 binom_eval = "binom_eval.plugin"
 
 [dependency-groups]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "coverage>=7.0"]
 
 # Version is derived from the latest `vX.Y.Z` git tag (via hatch-vcs /
 # setuptools-scm), so releases only need a tag -- no hardcoded version to bump.

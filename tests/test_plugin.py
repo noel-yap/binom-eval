@@ -7,6 +7,8 @@ that consume them.
 
 from __future__ import annotations
 
+import argparse
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +108,37 @@ class TestPytestAddOption:
     def test_timeout_constant_matches_runner_default(self) -> None:
         assert DEFAULT_TRIAL_TIMEOUT == DEFAULT_TIMEOUT_SECONDS
 
+    def test_isolate_skill_is_a_flag_off_by_default(self) -> None:
+        opt = self._options()["--live-eval-isolate-skill"]
+        assert opt["default"] is False
+        assert opt["action"] == "store_true"
+
+    def test_isolate_skill_path_requires_a_value_and_is_absent_by_default(
+        self,
+    ) -> None:
+        # No nargs="?": a value is mandatory, so it can never swallow the
+        # next positional argument.
+        opt = self._options()["--live-eval-isolate-skill-path"]
+        assert opt["default"] is None
+        assert opt["type"] is str
+        assert "nargs" not in opt
+
+    def test_isolate_skill_path_is_repeatable(self) -> None:
+        opt = self._options()["--live-eval-isolate-skill-path"]
+        assert opt["action"] == "append"
+        # Parse with argparse (what pytest's parser wraps) to confirm the
+        # registered kwargs really collect every occurrence, in order.
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--live-eval-isolate-skill-path", **opt)
+        parsed = parser.parse_args(
+            [
+                "--live-eval-isolate-skill-path=a",
+                "--live-eval-isolate-skill-path=b",
+            ]
+        )
+        assert parsed.live_eval_isolate_skill_path == ["a", "b"]
+        assert parser.parse_args([]).live_eval_isolate_skill_path is None
+
     def test_model_has_no_default_and_is_str(self) -> None:
         # No default: the `backend:` prefix is mandatory, so a live run must
         # name its harness explicitly rather than fall back to one.
@@ -143,6 +176,8 @@ class _StubConfig:
         target: float,
         concurrency: int = 4,
         isolate: bool = False,
+        isolate_skill: bool = False,
+        isolate_skill_path: Sequence[str] | None = None,
         model: str | None = "claude:haiku",
         pass_threshold: float = PASS_THRESHOLD,
         min_trials: int = DEFAULT_MIN_TRIALS,
@@ -156,6 +191,8 @@ class _StubConfig:
             "--live-eval-pass-threshold": pass_threshold,
             "--live-eval-concurrency": concurrency,
             "--live-eval-isolate": isolate,
+            "--live-eval-isolate-skill": isolate_skill,
+            "--live-eval-isolate-skill-path": isolate_skill_path,
             "--live-eval-model": model,
             "--live-eval-progress": progress,
             "--live-eval-timeout": timeout,
@@ -200,9 +237,9 @@ class TestMakeEvalRunsFixture:
     """
 
     @staticmethod
-    def _fixture_fn(**kwargs: Any) -> Any:
+    def _fixture_fn(repo_root: Path = Path("."), **kwargs: Any) -> Any:
         fixture = make_eval_runs_fixture(
-            Path("evals.json"), Path("."), "demo", {}, **kwargs
+            Path("evals.json"), repo_root, "demo", {}, **kwargs
         )
         return fixture.__wrapped__
 
@@ -315,6 +352,7 @@ class TestMakeEvalRunsFixture:
             min_trials: int = 0,
             gate: Any = None,
             isolate: bool = False,
+            isolate_skill: tuple[Path, ...] | None = None,
             model: str,
             runner: Any = None,
             timeout: int = DEFAULT_TRIAL_TIMEOUT,
@@ -345,6 +383,278 @@ class TestMakeEvalRunsFixture:
         assert sorted_calls[0] == ("e1", 21, 2.0 / 3.0, PASS_THRESHOLD)
         assert sorted_calls[1] == ("e2", 21, 2.0 / 3.0, PASS_THRESHOLD)
 
+    @staticmethod
+    def _repo(root: Path) -> None:
+        for name in ("demo", "other"):
+            skill = root / ".claude" / "skills" / name
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(name, encoding="utf-8")
+
+    def _run_capturing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_root: Path,
+        config: _StubConfig,
+    ) -> list[tuple[bool, Any]]:
+        monkeypatch.setattr(
+            plugin, "resolve_runner", lambda _spec: ("claude", "m", _FakeRunner())
+        )
+        monkeypatch.setattr(
+            plugin,
+            "load_evals",
+            lambda _path, _handlers: [
+                {"id": "e1", "assertions": []},
+                {"id": "e2", "assertions": []},
+            ],
+        )
+        seen: list[tuple[bool, Any]] = []
+
+        def fake_adaptive(*_args: Any, **kwargs: Any) -> list[EvalRun]:
+            # `isolate_skill` is forwarded only when set (see below).
+            seen.append((kwargs["isolate"], kwargs.get("isolate_skill")))
+            return []
+
+        self._fixture_fn(repo_root, run_adaptive=fake_adaptive)(config)
+        return seen
+
+    def test_isolate_skill_absent_leaves_whole_tree_copy(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._repo(tmp_path)
+        seen = self._run_capturing(
+            monkeypatch, tmp_path, _StubConfig(21, 2.0 / 3.0)
+        )
+        assert seen == [(False, None), (False, None)]
+
+    def test_isolate_skill_not_forwarded_when_unset(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # An injected `run_adaptive` written before `isolate_skill` existed has
+        # no such parameter; passing `isolate_skill=None` would be a TypeError.
+        self._repo(tmp_path)
+        monkeypatch.setattr(
+            plugin, "resolve_runner", lambda _spec: ("claude", "m", _FakeRunner())
+        )
+        monkeypatch.setattr(
+            plugin,
+            "load_evals",
+            lambda _path, _handlers: [{"id": "e1", "assertions": []}],
+        )
+
+        def legacy_adaptive(
+            item: dict[str, Any],
+            repo_root: Path,
+            skill_name: str,
+            max_trials: int,
+            target: float,
+            checks: list[Any],
+            *,
+            pass_threshold: float = PASS_THRESHOLD,
+            min_trials: int = 0,
+            gate: Any = None,
+            isolate: bool = False,
+            model: str,
+            runner: Any = None,
+            timeout: int = DEFAULT_TRIAL_TIMEOUT,
+            on_progress: Any = None,
+        ) -> list[EvalRun]:
+            return []
+
+        result = self._fixture_fn(tmp_path, run_adaptive=legacy_adaptive)(
+            _StubConfig(21, 2.0 / 3.0)
+        )
+        assert result == {"e1": []}
+
+    def test_isolate_alone_does_not_narrow_to_a_skill(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._repo(tmp_path)
+        seen = self._run_capturing(
+            monkeypatch, tmp_path, _StubConfig(21, 2.0 / 3.0, isolate=True)
+        )
+        assert seen == [(True, None), (True, None)]
+
+    def test_isolate_skill_flag_implies_isolate_and_resolves_by_name(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._repo(tmp_path)
+        seen = self._run_capturing(
+            monkeypatch,
+            tmp_path,
+            _StubConfig(21, 2.0 / 3.0, isolate_skill=True),
+        )
+        expected = (tmp_path.resolve() / ".claude/skills/demo",)
+        assert seen == [(True, expected), (True, expected)]
+
+    def test_isolate_skill_path_implies_isolate(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._repo(tmp_path)
+        seen = self._run_capturing(
+            monkeypatch,
+            tmp_path,
+            _StubConfig(
+                21, 2.0 / 3.0, isolate_skill_path=[".claude/skills/other"]
+            ),
+        )
+        expected = (tmp_path.resolve() / ".claude/skills/other",)
+        assert seen == [(True, expected), (True, expected)]
+
+    def test_flag_and_path_are_additive(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Previously an explicit path won over the flag; now the two are
+        # unioned so the evaluated skill and a helper it invokes are both
+        # kept (and the third skill is still dropped).
+        self._repo(tmp_path)
+        seen = self._run_capturing(
+            monkeypatch,
+            tmp_path,
+            _StubConfig(
+                21,
+                2.0 / 3.0,
+                isolate_skill=True,
+                isolate_skill_path=[".claude/skills/other"],
+            ),
+        )
+        root = tmp_path.resolve()
+        expected = (root / ".claude/skills/demo", root / ".claude/skills/other")
+        assert seen == [(True, expected), (True, expected)]
+
+    def test_several_paths_are_all_forwarded(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._repo(tmp_path)
+        seen = self._run_capturing(
+            monkeypatch,
+            tmp_path,
+            _StubConfig(
+                21,
+                2.0 / 3.0,
+                isolate_skill_path=[
+                    ".claude/skills/other",
+                    ".claude/skills/demo",
+                ],
+            ),
+        )
+        root = tmp_path.resolve()
+        expected = (root / ".claude/skills/other", root / ".claude/skills/demo")
+        assert seen == [(True, expected), (True, expected)]
+
+    def test_flag_location_duplicated_by_a_path_is_kept_once(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._repo(tmp_path)
+        seen = self._run_capturing(
+            monkeypatch,
+            tmp_path,
+            _StubConfig(
+                21,
+                2.0 / 3.0,
+                isolate_skill=True,
+                isolate_skill_path=[".claude/skills/demo"],
+            ),
+        )
+        expected = (tmp_path.resolve() / ".claude/skills/demo",)
+        assert seen == [(True, expected), (True, expected)]
+
+    def test_one_bad_path_among_several_fails_once_naming_it(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._repo(tmp_path)
+        calls: list[str] = []
+
+        def fake_adaptive(*_args: Any, **_kwargs: Any) -> list[EvalRun]:
+            calls.append("trial")
+            return []
+
+        monkeypatch.setattr(
+            plugin, "resolve_runner", lambda _spec: ("claude", "m", _FakeRunner())
+        )
+        monkeypatch.setattr(
+            plugin,
+            "load_evals",
+            lambda _path, _handlers: [
+                {"id": "e1", "assertions": []},
+                {"id": "e2", "assertions": []},
+            ],
+        )
+        with pytest.raises(pytest.fail.Exception, match="skills/typo"):
+            self._fixture_fn(tmp_path, run_adaptive=fake_adaptive)(
+                _StubConfig(
+                    21,
+                    2.0 / 3.0,
+                    isolate_skill=True,
+                    isolate_skill_path=[
+                        ".claude/skills/other",
+                        ".claude/skills/typo",
+                    ],
+                )
+            )
+        assert calls == []
+
+    @pytest.mark.parametrize(
+        ("path", "message"),
+        [
+            ("/etc", "absolute"),
+            ("../elsewhere", "inside the repo root"),
+            (".claude/skills/../../..", "inside the repo root"),
+            (".claude/skills/absent", "not found"),
+            (".claude/skills/other/sub", "inside skill container"),
+            (".claude/skills", "inside skill container"),
+        ],
+    )
+    def test_bad_skill_path_fails_once_before_any_trial(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        path: str,
+        message: str,
+    ) -> None:
+        self._repo(tmp_path)
+        (tmp_path / ".claude/skills/other/sub").mkdir()
+        calls: list[str] = []
+
+        def fake_adaptive(*_args: Any, **_kwargs: Any) -> list[EvalRun]:
+            calls.append("trial")
+            return []
+
+        monkeypatch.setattr(
+            plugin, "resolve_runner", lambda _spec: ("claude", "m", _FakeRunner())
+        )
+        monkeypatch.setattr(
+            plugin,
+            "load_evals",
+            lambda _path, _handlers: [
+                {"id": "e1", "assertions": []},
+                {"id": "e2", "assertions": []},
+            ],
+        )
+        with pytest.raises(pytest.fail.Exception, match=message):
+            self._fixture_fn(tmp_path, run_adaptive=fake_adaptive)(
+                _StubConfig(21, 2.0 / 3.0, isolate_skill_path=[path])
+            )
+        assert calls == []
+
+    def test_missing_skill_for_flag_fails_before_any_trial(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # No skills dirs at all: `--live-eval-isolate-skill` cannot resolve.
+        calls: list[str] = []
+        monkeypatch.setattr(
+            plugin, "resolve_runner", lambda _spec: ("claude", "m", _FakeRunner())
+        )
+
+        def fake_adaptive(*_args: Any, **_kwargs: Any) -> list[EvalRun]:
+            calls.append("trial")
+            return []
+
+        with pytest.raises(pytest.fail.Exception, match="not found"):
+            self._fixture_fn(tmp_path, run_adaptive=fake_adaptive)(
+                _StubConfig(21, 2.0 / 3.0, isolate_skill=True)
+            )
+        assert calls == []
+
     def test_forwards_custom_pass_threshold_to_adaptive(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -371,6 +681,7 @@ class TestMakeEvalRunsFixture:
             min_trials: int = 0,
             gate: Any = None,
             isolate: bool = False,
+            isolate_skill: tuple[Path, ...] | None = None,
             model: str,
             runner: Any = None,
             timeout: int = DEFAULT_TRIAL_TIMEOUT,
@@ -420,6 +731,7 @@ class TestMakeEvalRunsFixture:
             min_trials: int = 0,
             gate: Any = None,
             isolate: bool = False,
+            isolate_skill: tuple[Path, ...] | None = None,
             model: str,
             runner: Any = None,
             timeout: int = DEFAULT_TRIAL_TIMEOUT,
@@ -469,6 +781,7 @@ class TestMakeEvalRunsFixture:
             min_trials: int = 0,
             gate: Any = None,
             isolate: bool = False,
+            isolate_skill: tuple[Path, ...] | None = None,
             model: str,
             runner: Any = None,
             timeout: int = DEFAULT_TRIAL_TIMEOUT,

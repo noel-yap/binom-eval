@@ -36,7 +36,7 @@ import subprocess
 import tempfile
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -71,6 +71,11 @@ ISOLATION_IGNORE = (
     ".venv",
     "node_modules",
 )
+
+# Conventional skill containers under the repo root, searched (relative to
+# it) by the `--live-eval-isolate-skill` form. Cursor also reads
+# `.claude/skills/` and `skills/`, so all three are checked.
+SKILL_ROOTS = (".claude/skills", ".cursor/skills", "skills")
 
 
 # Markers Claude Code sets on every child process to signal a nested
@@ -242,8 +247,195 @@ def _format_model_error(
     return f"{message}; valid models: {known}"
 
 
+def resolve_skill_dirs(
+    repo_root: Path,
+    skill_name: str,
+    skill_paths: Sequence[str] = (),
+    include_evaluated: bool = False,
+) -> tuple[Path, ...]:
+    """Resolve and validate the skill directories to keep when isolating.
+
+    The result is the union of (a) with `include_evaluated`
+    (`--live-eval-isolate-skill`), the conventional locations of `skill_name`
+    under `repo_root` that hold a `SKILL.md` (a stray directory without one is
+    ignored as long as another location has the skill; none at all is an
+    error), and (b) every `skill_paths` entry
+    (`--live-eval-isolate-skill-path`, repeatable), each relative to
+    `repo_root` and inside it. The two are additive, so the evaluated skill
+    plus helper skills it invokes can all be kept. Duplicates (the same
+    normalized location, e.g. the flag's skill also given as a path) appear
+    once, in first-seen order. With neither, the result is empty.
+
+    Returned paths are lexically normalized locations under the resolved
+    `repo_root`; a skill directory (or a container on the way to it) that is
+    a symlink is deliberately left unresolved, because that is the location
+    `copytree` walks and `isolated_workdir` later dereferences. Where it
+    points must still resolve inside `repo_root`, checked here for the flag
+    and path forms alike.
+
+    Raises:
+      ValueError: naming the offending path, when a `skill_paths` entry is
+        absolute, lies outside `repo_root` (or is `repo_root` itself), when a
+        skill directory or one of its containers is a symlink whose target
+        resolves outside `repo_root`, when an entry lies at or under a
+        standard container (`SKILL_ROOTS`) without being exactly
+        `<container>/<name>` holding a `SKILL.md`, or when no matching skill
+        directory exists (flag form: none holds a `SKILL.md`), so a typo never
+        silently copies nothing (or everything). Any bad element fails the
+        whole call.
+    """
+    root = repo_root.resolve()
+    found: list[Path] = []
+    if include_evaluated:
+        candidates = [root / base / skill_name / "SKILL.md" for base in SKILL_ROOTS]
+        evaluated = [path.parent for path in candidates if path.is_file()]
+        if not evaluated:
+            # A stray directory without a SKILL.md at one location must not
+            # fail the run while another location holds the real skill, so
+            # only candidates with a SKILL.md count; none at all is the error.
+            tried = ", ".join(str(path) for path in candidates)
+            raise ValueError(
+                "--live-eval-isolate-skill: skill directory not found "
+                f"(no SKILL.md at any of: {tried})"
+            )
+        found.extend(evaluated)
+    for skill_path in skill_paths:
+        if Path(skill_path).is_absolute():
+            raise ValueError(
+                "--live-eval-isolate-skill-path must be relative to the repo "
+                f"root, got absolute path {skill_path!r}"
+            )
+        candidate = Path(os.path.normpath(root / skill_path))
+        if candidate == root or root not in candidate.parents:
+            raise ValueError(
+                "--live-eval-isolate-skill-path must stay inside the repo "
+                f"root {root}, got {skill_path!r}"
+            )
+        if not candidate.is_dir():
+            raise ValueError(
+                f"--live-eval-isolate-skill-path {skill_path!r}: skill "
+                f"directory not found (tried {candidate})"
+            )
+        found.append(candidate)
+    for path in found:
+        _check_skill_location(path, root)
+        target = path.resolve()
+        if target == root or root not in target.parents:
+            raise ValueError(
+                f"skill directory {path} resolves to {target}, which is not "
+                f"inside the repo root {root}"
+            )
+    return tuple(dict.fromkeys(found))
+
+
+def _check_skill_location(path: Path, root: Path) -> None:
+    """Reject a skill directory that lies at or under a standard container
+    (`SKILL_ROOTS`) unless it is exactly `<container>/<name>` holding a
+    `SKILL.md`. Judged lexically (a symlink is not resolved), so a path inside
+    a skill, or a container itself, is rejected rather than resolved up (the
+    sibling filter would otherwise drop every skill). Paths outside every
+    container are unchecked. `path` is a normalized location under the
+    resolved `root`.
+    """
+    parts = Path(os.path.normpath(path)).relative_to(root).parts
+    for base in SKILL_ROOTS:
+        container = Path(base).parts
+        if parts[: len(container)] != container:
+            continue
+        if len(parts) != len(container) + 1 or not (path / "SKILL.md").is_file():
+            raise ValueError(
+                f"--live-eval-isolate-skill-path {'/'.join(parts)} is inside "
+                f"skill container {base}; point it at the skill directory "
+                f"itself ({base}/<name>) containing SKILL.md"
+            )
+
+
+def _is_skill(directory: str, name: str) -> bool:
+    """Whether `directory/name` is a skill: a directory holding `SKILL.md`
+    (followed through symlinks)."""
+    return os.path.isfile(os.path.join(directory, name, "SKILL.md"))
+
+
+def _sibling_skills(directory: str, names: list[str], kept: set[str]) -> set[str]:
+    """The children of a skill container to drop: skills that are not kept.
+    Non-skill entries (a README, a `_shared` directory, ...) stay."""
+    return {name for name in names if name not in kept and _is_skill(directory, name)}
+
+
+def _skill_containers(
+    skill_dirs: tuple[Path, ...], root: Path
+) -> dict[Path, set[str]]:
+    """Map every location where sibling skills must be filtered to the names
+    to keep there.
+
+    The locations are the `SKILL_ROOTS` under the resolved `root` as spelled
+    *and* where each resolves to inside `root`. A container that is a symlink
+    (`.claude/skills -> ../shared/skills`, `.cursor/skills ->
+    ../.claude/skills`) or sits under a symlinked parent (`.claude ->
+    ../shared/claude`) shares its contents with its target, which `copytree`
+    walks as an ordinary directory, so the target is filtered too. Containers
+    that resolve to the same place share one set of kept names (the kept
+    skill's name, per container).
+    """
+    lexical = [root / base for base in SKILL_ROOTS]
+
+    def real(container: Path) -> Path:
+        target = container.resolve()
+        return target if root in target.parents else container
+
+    kept: dict[Path, set[str]] = {real(container): set() for container in lexical}
+    for skill_dir in skill_dirs:
+        if skill_dir.parent in lexical:
+            kept[real(skill_dir.parent)].add(skill_dir.name)
+    return {**kept, **{container: kept[real(container)] for container in lexical}}
+
+
+def _skill_ignore(
+    skill_dirs: tuple[Path, ...], repo_root: Path
+) -> Callable[[str, list[str]], set[str]]:
+    """Build a `copytree` ignore callback excluding sibling skills.
+
+    In a standard skill container, every child that looks like a skill (a
+    directory containing `SKILL.md`) and is not a kept skill directory is
+    skipped; non-skill entries (files, directories without `SKILL.md`) are
+    kept. Containers are the `SKILL_ROOTS` under `repo_root` (whether or not
+    they hold a kept skill, so sibling skills in the other conventional
+    containers do not leak) plus the in-repo target of each symlinked
+    container or container under a symlinked parent (see
+    `_skill_containers`), so a shared real directory such as `shared/skills`
+    is filtered where it is walked. A kept skill whose parent is not a
+    standard container (e.g. an explicit path such as `my-skill` or
+    `plugins/x/skills/foo`) leaves that parent unfiltered: it is copied
+    normally, siblings included. `copytree` is walking `repo_root` as spelled
+    (or, when copying a symlink target, the resolved root), so each visited
+    directory is re-based onto the resolved root lexically. A symlink is never
+    walked by `copytree`; see `_dereference_symlinks`. Composed with
+    `ISOLATION_IGNORE`.
+    """
+    root = repo_root.resolve()
+    keep = _skill_containers(skill_dirs, root)
+    base = shutil.ignore_patterns(*ISOLATION_IGNORE)
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        skipped = set(base(directory, names))
+        try:
+            relative = Path(directory).relative_to(repo_root)
+        except ValueError:
+            relative = Path(directory).relative_to(root)
+        kept = keep.get(Path(os.path.normpath(root / relative)))
+        if kept is not None:
+            skipped |= _sibling_skills(directory, names, kept)
+        return skipped
+
+    return ignore
+
+
 @contextlib.contextmanager
-def isolated_workdir(repo_root: Path, isolate: bool) -> Iterator[Path]:
+def isolated_workdir(
+    repo_root: Path,
+    isolate: bool,
+    isolate_skill: tuple[Path, ...] | None = None,
+) -> Iterator[Path]:
     """Yield the working directory for a single run.
 
     When `isolate` is false, yields `repo_root` unchanged -- every run shares
@@ -256,22 +448,112 @@ def isolated_workdir(repo_root: Path, isolate: bool) -> Iterator[Path]:
     Args:
       repo_root: The tree `claude -p` should run against.
       isolate: Whether to run in a throwaway copy rather than `repo_root`.
+      isolate_skill: When not None, the skill directories to keep (as
+        returned by `resolve_skill_dirs`); sibling skills (directories with a
+        `SKILL.md`) in the standard containers (`SKILL_ROOTS`) are excluded
+        from the copy, while non-skill entries there are kept. A skill outside
+        those containers keeps its parent's other children. A symlinked skill
+        directory, standard container, or parent of one is replaced in the
+        copy by a real directory (filtered the same way); other symlinks are
+        copied as links. The in-repo target of a symlinked container (e.g.
+        `shared/skills` behind `.claude/skills`) is filtered too, wherever it
+        is copied, so no sibling skill is visible at any location. A symlinked
+        parent of a container is handled the same way (`.claude ->
+        ../shared/claude`).
 
     Yields:
       The directory to use as the run's `cwd`.
+
+    Raises:
+      ValueError: when `isolate_skill` is empty or names a directory that
+        does not exist inside `repo_root` (lexically, or via a symlinked skill
+        directory or container whose target is outside it), or when a path
+        lies at or under a standard container without being exactly
+        `<container>/<name>` holding a `SKILL.md`.
     """
     if not isolate:
         yield repo_root
         return
+    ignore = shutil.ignore_patterns(*ISOLATION_IGNORE)
+    if isolate_skill is not None:
+        root = repo_root.resolve()
+        bad = [path for path in isolate_skill if not _inside(path, root)]
+        if not isolate_skill or bad:
+            raise ValueError(
+                f"isolate_skill must name existing directories inside {root}, "
+                f"got {[str(path) for path in isolate_skill]}"
+            )
+        for path in isolate_skill:
+            _check_skill_location(Path(os.path.normpath(path)), root)
+        kept = tuple(Path(os.path.normpath(path)) for path in isolate_skill)
+        ignore = _skill_ignore(kept, repo_root)
     with tempfile.TemporaryDirectory(prefix="binom-eval-", ignore_cleanup_errors=True) as tmp:
         dest = Path(tmp) / repo_root.name
-        shutil.copytree(
-            repo_root,
-            dest,
-            symlinks=True,
-            ignore=shutil.ignore_patterns(*ISOLATION_IGNORE),
-        )
+        shutil.copytree(repo_root, dest, symlinks=True, ignore=ignore)
+        if isolate_skill is not None:
+            _dereference_symlinks(kept, root, dest, ignore)
         yield dest
+
+
+def _dereference_symlinks(
+    skill_dirs: tuple[Path, ...],
+    root: Path,
+    dest: Path,
+    ignore: Callable[[str, list[str]], set[str]],
+) -> None:
+    """Replace copied symlinks on the way to skills with real, filtered copies.
+
+    `copytree(symlinks=True)` copies a symlink as a symlink and never walks
+    it, so the ignore callback never filters it, and in the copy it dangles
+    (relative link) or points back into the real repo (absolute link), so
+    sibling skills would leak and writes would escape. Every symlink among the
+    path components of each `SKILL_ROOTS` container and each kept skill
+    directory (a symlinked parent such as `.claude`, the container, or the
+    skill itself) is swapped, outermost first, for a copy of its resolved
+    target made with `ignore`, so sibling skills are dropped from the copy
+    exactly as in the main walk. The rest of the tree keeps its symlinks.
+    A symlink on the way to a container with no kept skill whose target is
+    outside `root` (or not a directory) is just removed: nothing of it can be
+    copied, and it must not leave a link back out. On the way to a kept skill
+    that cannot occur for validated input (`resolve_skill_dirs`); it raises
+    rather than silently deleting the skill. `skill_dirs` are lexical
+    locations under the resolved `root`.
+    """
+    required = {
+        Path(*rel.parts[:i])
+        for rel in (skill.relative_to(root) for skill in skill_dirs)
+        for i in range(1, len(rel.parts) + 1)
+    }
+    prefixes = required | {
+        Path(*Path(base).parts[:i])
+        for base in SKILL_ROOTS
+        for i in range(1, len(Path(base).parts) + 1)
+    }
+    for prefix in sorted(prefixes, key=lambda path: len(path.parts)):
+        entry = dest / prefix
+        if not entry.is_symlink():
+            continue
+        entry.unlink(missing_ok=True)
+        target = (root / prefix).resolve()
+        if target == root or root not in target.parents or not target.is_dir():
+            if prefix in required:
+                raise ValueError(
+                    f"isolate_skill must name existing directories inside "
+                    f"{root}, but {root / prefix} resolves to {target}"
+                )
+            continue
+        shutil.copytree(target, entry, symlinks=True, ignore=ignore)
+
+
+def _inside(path: Path, root: Path) -> bool:
+    """Whether `path` is an existing directory under `root`, before and after
+    following symlinks (`root` already resolved)."""
+    lexical = Path(os.path.normpath(path))
+    return (
+        root in lexical.parents
+        and path.is_dir()
+        and root in path.resolve().parents
+    )
 
 
 class Runner(ABC):
@@ -311,6 +593,7 @@ class Runner(ABC):
         timeout: int = DEFAULT_TIMEOUT_SECONDS,
         *,
         isolate: bool = False,
+        isolate_skill: tuple[Path, ...] | None = None,
         model: str,
     ) -> EvalRun:
         """Invoke the backend once and parse its output into an `EvalRun`."""
@@ -369,6 +652,7 @@ def run_eval_batch(
     *,
     gate: threading.Semaphore | None = None,
     isolate: bool = False,
+    isolate_skill: tuple[Path, ...] | None = None,
     model: str,
     runner: Runner,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
@@ -384,7 +668,8 @@ def run_eval_batch(
     spawning its subprocess; the same object passed across batches and across
     concurrently-running evals caps total live calls at its count. `isolate`
     is forwarded to the runner so each trial runs in its own throwaway copy of
-    `repo_root` when set. `model` selects the specific model used for all
+    `repo_root` when set; `isolate_skill` narrows that copy to the evaluated
+    skill (see `isolated_workdir`). `model` selects the specific model used for all
     trials in the batch. `runner` is the backend every trial runs against;
     it is backend-agnostic (`ClaudeRunner`, `CursorRunner`, ...).
     `timeout` sets the per-trial subprocess deadline in seconds; defaults to
@@ -398,10 +683,20 @@ def run_eval_batch(
         gate if gate is not None else contextlib.nullcontext()
     )
 
+    # Forwarded only when set, so a `Runner` written before `isolate_skill`
+    # existed (whose `run` does not accept it) keeps working.
+    extra = {} if isolate_skill is None else {"isolate_skill": isolate_skill}
+
     def one(_: int) -> EvalRun:
         with limit:
             return backend.run(
-                prompt, repo_root, skill_name, timeout, isolate=isolate, model=model
+                prompt,
+                repo_root,
+                skill_name,
+                timeout,
+                isolate=isolate,
+                model=model,
+                **extra,
             )
 
     with ThreadPoolExecutor(max_workers=count) as pool:
@@ -417,6 +712,7 @@ __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
     "ISOLATION_IGNORE",
     "NESTED_SESSION_MARKERS",
+    "SKILL_ROOTS",
     "TRIAL_RETRY",
     "ClaudeRunner",
     "CursorRunner",
@@ -424,6 +720,7 @@ __all__ = [
     "fake_home_env",
     "isolated_workdir",
     "resolve_runner",
+    "resolve_skill_dirs",
     "run_eval_batch",
     "stripped_env",
 ]
