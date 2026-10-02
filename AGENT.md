@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make test                          # fast unit suite (no live claude -p calls)
 make test-all                      # all tests, including live evals (needs claude on PATH)
 make test-live                     # live evals only
+make coverage                      # fast unit suite + per-file coverage report (htmlcov/)
+make coverage-compare              # fail if files changed vs origin/main lost coverage (BASE=ref)
 make test ARGS="-k grading"        # run a subset by keyword
 make example                       # run the bundled example eval suite
 uv run pytest tests/test_grading.py  # equivalent without make
