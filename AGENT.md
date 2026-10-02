@@ -21,6 +21,9 @@ pytest path/to/evals -m live_eval \
     --live-eval-max-trials 12 \
     --live-eval-concurrency 8 \
     --live-eval-isolate \
+    --live-eval-isolate-skill \
+    --live-eval-isolate-skill-path=.claude/skills/helper \
+    --live-eval-isolate-skill-path=PATH \
     --live-eval-model claude:claude-sonnet-4-6 \
     --live-eval-failure-max-chars 10000 \
     --live-eval-pass-threshold 0.95 \
@@ -33,6 +36,31 @@ model as `backend:model` (known backends: `claude`, `cursor`). The `backend:`
 prefix is mandatory — a bare model with no prefix is an error — so each run
 targets a named harness. Each pytest run targets a single backend; run pytest
 once per backend to grade on both.
+
+`--live-eval-isolate-skill` and `--live-eval-isolate-skill-path=PATH` each
+imply `--live-eval-isolate` but copy only the skills they name, excluding
+all other skills (directories with a `SKILL.md`) in the standard containers
+(`SKILL_ROOTS`); shared non-skill entries there (README, `_shared/`) are kept.
+For a `PATH` outside those containers only the standard containers' sibling
+skills are dropped; siblings in its non-standard parent are NOT excluded. A
+symlinked container or skill directory must resolve inside the repo and is
+copied as a real directory, and the in-repo target of a symlinked container
+(`.claude/skills -> ../shared/skills`) is filtered too, so no sibling skill is
+visible at any location. The flag finds the skill by name at
+`<root>/{.claude,.cursor}/skills/<skill>/` (or `skills/<skill>/`), ignoring
+locations without a `SKILL.md` (an error only if none has one); `PATH` names
+a directory explicitly and may be repeated (to keep helper skills the
+evaluated skill invokes), relative to the repo root (absolute paths and paths
+escaping the root are rejected; under a standard container it must be exactly
+`<container>/<name>` holding a `SKILL.md`, never a path inside a skill or the
+container itself). The two are additive: the kept skills are the evaluated
+skill (with the flag) plus every `PATH`, de-duplicated by location, e.g.
+`--live-eval-isolate-skill --live-eval-isolate-skill-path=.claude/skills/helper`
+(either option alone works too). Every directory is resolved and validated
+once, up front, in `make_eval_runs_fixture` (`resolve_skill_dirs`); a missing
+or invalid one fails the run, naming it, before any trial. Neither option (`None`) leaves isolation copying the whole tree;
+`isolate_skill` is forwarded to runners/batch runners only when set, so
+older custom ones without that parameter keep working.
 
 `--live-eval-failure-max-chars` caps each failure section rendered in pytest
 output (default 2000; zero or negative disables truncation).
@@ -95,7 +123,7 @@ with auto-generated notes.
 | `grading.py` | Backward-compatible facade re-exporting every name from the five modules above (kept so existing `binom_eval.grading` imports still resolve) |
 | `plugin.py` | pytest integration: `--live-eval-*` CLI options, `live_eval` marker, `make_eval_runs_fixture` |
 | `suite.py` | Thin consumer wiring: `bind_eval_runs_fixture` (for `conftest.py`) and `register_live_eval_tests` (for `test_evals.py`) |
-| `runner/` | subprocess layer: the `Runner` backends (`ClaudeRunner`, `CursorRunner`) selected by `resolve_runner` from a `backend:model` spec, the throttled backend-agnostic `run_eval_batch` (shared `threading.Semaphore`), per-backend `preflight`/`validate_model`, and `isolated_workdir`; `retry.py` holds `RetryPolicy`/`RetryableError` (deadline-aware back-off loop used for the Models API lookup and, via `TRIAL_RETRY`, for transient trial failures — a trial that still errors after retries is returned with `EvalRun.errored=True`) |
+| `runner/` | subprocess layer: the `Runner` backends (`ClaudeRunner`, `CursorRunner`) selected by `resolve_runner` from a `backend:model` spec, the throttled backend-agnostic `run_eval_batch` (shared `threading.Semaphore`), per-backend `preflight`/`validate_model`, and `isolated_workdir` (with the pre-resolved `isolate_skill` dirs from `resolve_skill_dirs` narrowing the copy to the kept skills, the evaluated one and/or those named by the repeatable `--live-eval-isolate-skill-path`); `retry.py` holds `RetryPolicy`/`RetryableError` (deadline-aware back-off loop used for the Models API lookup and, via `TRIAL_RETRY`, for transient trial failures — a trial that still errors after retries is returned with `EvalRun.errored=True`) |
 | `stream_json.py` | `EvalRun` dataclass, `parse_stream_json` (parses `claude -p` stdout), skill/agent invocation predicates |
 | `text_utils.py` | Pure text/regex helpers for assertion modules |
 

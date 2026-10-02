@@ -220,6 +220,7 @@ class CursorRunner(Runner):
         timeout: int = DEFAULT_TIMEOUT_SECONDS,
         *,
         isolate: bool = False,
+        isolate_skill: tuple[Path, ...] | None = None,
         model: str,
     ) -> EvalRun:
         """Invoke `cursor-agent --print` once and parse its stream-json output.
@@ -227,7 +228,8 @@ class CursorRunner(Runner):
         With `isolate=True` the call runs in a throwaway copy of `repo_root`
         (see `isolated_workdir`) so a skill that writes to the tree cannot
         affect `repo_root` or a concurrent run; otherwise it runs in
-        `repo_root` directly. `--force` and `--trust` keep the headless run
+        `repo_root` directly. `isolate_skill` narrows the copy to the evaluated
+        skill's directory, excluding sibling skills. `--force` and `--trust` keep the headless run
         from blocking on command or workspace-trust prompts. The run is pinned
         to the working tree with `--workspace` (and a matching `cwd`) so the
         project's own `.cursor/skills/`, `skills/`, and `.claude/skills/` trees
@@ -250,7 +252,7 @@ class CursorRunner(Runner):
         """
         def attempt(remaining: float, last_error: list[str]) -> EvalRun:
             with (
-                isolated_workdir(repo_root, isolate) as workdir,
+                isolated_workdir(repo_root, isolate, isolate_skill) as workdir,
                 fake_home_env() as base_env,
             ):
                 env = cursor_env(base_env)

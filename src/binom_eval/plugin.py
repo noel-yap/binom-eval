@@ -26,7 +26,11 @@ from binom_eval.grading import (
     run_eval_adaptive,
 )
 from binom_eval.progress import make_renderer
-from binom_eval.runner import DEFAULT_TIMEOUT_SECONDS, resolve_runner
+from binom_eval.runner import (
+    DEFAULT_TIMEOUT_SECONDS,
+    resolve_runner,
+    resolve_skill_dirs,
+)
 from binom_eval.stream_json import EvalRun
 
 # Budget ceiling: the most trials any single eval will ever run. A verdict
@@ -225,6 +229,44 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         ),
     )
     parser.addoption(
+        "--live-eval-isolate-skill",
+        action="store_true",
+        default=False,
+        help=(
+            "Implies --live-eval-isolate, but copies only the skill under "
+            "evaluation, excluding sibling skills (directories with a "
+            "SKILL.md); shared non-skill entries in the skill containers are "
+            "kept. Add helper skills with --live-eval-isolate-skill-path "
+            "(additive). The skill is found by name "
+            "at `<repo_root>/.claude/skills/<skill>/` (or the "
+            "`.cursor/skills/` or `skills/` equivalent); locations without a "
+            "SKILL.md are ignored. Errors if none has one."
+        ),
+    )
+    parser.addoption(
+        "--live-eval-isolate-skill-path",
+        action="append",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Like --live-eval-isolate-skill, but names a skill directory "
+            "explicitly; repeatable, to keep several skills (e.g. the "
+            "evaluated skill plus helpers it invokes): "
+            "--live-eval-isolate-skill-path=.claude/skills/helper. Each PATH "
+            "is relative to the repo root (absolute paths and paths escaping "
+            "it are rejected). A path under a standard skill container must "
+            "be exactly `<container>/<name>` holding a SKILL.md (a path "
+            "inside a skill, or a container itself, is rejected). Sibling "
+            "skills in the standard skill containers that are not kept are "
+            "dropped (non-skill entries are kept); for a path outside them, "
+            "siblings in its non-standard parent are kept. Additive with "
+            "--live-eval-isolate-skill: the kept skills are the evaluated "
+            "skill (if that flag is given) plus every PATH, de-duplicated. "
+            "Any invalid PATH fails the run."
+        ),
+    )
+    parser.addoption(
         "--live-eval-model",
         action="store",
         type=str,
@@ -341,7 +383,10 @@ def make_eval_runs_fixture(
     `assertion_handlers` (plus the skill-trigger check). A single shared
     semaphore (`--live-eval-concurrency`) caps total live calls across all of
     this; `--live-eval-isolate` runs each trial in a throwaway copy of
-    `repo_root` for skills that write to the tree. Every run is a fresh live
+    `repo_root` for skills that write to the tree
+    (`--live-eval-isolate-skill` / the repeatable
+    `--live-eval-isolate-skill-path` imply it and copy only the evaluated
+    skill and/or the named ones, additively). Every run is a fresh live
     call; results are never cached. `run_adaptive` defaults to
     `run_eval_adaptive` and exists so callers/tests can inject a different
     adaptive-eval driver.
@@ -383,7 +428,22 @@ def make_eval_runs_fixture(
                 pytrace=False,
             )
         concurrency = pytestconfig.getoption("--live-eval-concurrency")
-        isolate = pytestconfig.getoption("--live-eval-isolate")
+        isolate_skill = None
+        skill_paths = pytestconfig.getoption("--live-eval-isolate-skill-path") or []
+        include_evaluated = pytestconfig.getoption("--live-eval-isolate-skill")
+        if skill_paths or include_evaluated:
+            # Resolved once, up front, so a bad path fails the run with one
+            # clear error instead of inside every trial's retry loop.
+            try:
+                isolate_skill = resolve_skill_dirs(
+                    repo_root, skill_name, skill_paths, include_evaluated
+                )
+            except ValueError as exc:
+                pytest.fail(f"cannot isolate skill: {exc}", pytrace=False)
+        isolate = (
+            pytestconfig.getoption("--live-eval-isolate")
+            or isolate_skill is not None
+        )
         timeout = pytestconfig.getoption("--live-eval-timeout")
         progress_enabled = pytestconfig.getoption("--live-eval-progress")
         renderer = make_renderer() if progress_enabled else None
@@ -398,6 +458,9 @@ def make_eval_runs_fixture(
 
         def build(item: dict[str, Any]) -> list[EvalRun]:
             checks = _eval_checks(item, assertion_handlers, skill_name)
+            # Forwarded only when set, so an injected `run_adaptive` written
+            # before `isolate_skill` existed keeps working.
+            extra = {} if isolate_skill is None else {"isolate_skill": isolate_skill}
             return run_adaptive(
                 item,
                 repo_root,
@@ -413,6 +476,7 @@ def make_eval_runs_fixture(
                 runner=runner,
                 timeout=timeout,
                 on_progress=renderer,
+                **extra,
             )
 
         # Drive the evals concurrently; the shared `gate` -- not the worker
