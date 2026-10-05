@@ -11,13 +11,15 @@ consumer supplies:
 | `conftest.py` | Binds the session-scoped `eval_runs` fixture via `bind_eval_runs_fixture(...)`. |
 | `test_evals.py` | Registers the standard live-eval tests via `register_live_eval_tests(...)`. |
 
-Run it (needs the `claude` CLI on `PATH`):
+Run it (needs the CLI for the backend you pick on `PATH` — `claude` or Cursor's, for example):
 
 ```bash
-pytest examples/example-skill/evals -m live_eval
+pytest examples/example-skill/evals -m live_eval --live-eval-model claude:claude-haiku-4-5-20251001
+# or on another harness:
+pytest examples/example-skill/evals -m live_eval --live-eval-model cursor:sonnet-4.5
 ```
 
-Without `claude` on `PATH` the `eval_runs` fixture skips, so collection still
+Without the selected backend's CLI on `PATH` the `eval_runs` fixture skips, so collection still
 succeeds. The `--live-eval-max-trials` / `--live-eval-target-rate` options and
 the `live_eval` marker come from the installed `binom_eval` pytest plugin —
 no `sys.path` wiring or hook re-exports needed.

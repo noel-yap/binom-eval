@@ -1,16 +1,42 @@
 # binom-eval
 
-**Bayesian (Beta-binomial) grading for AI skill / agent evals.**
+**Bayesian (Beta-binomial) grading for AI skill / agent evals, on any AI harness.**
 
-`binom-eval` grades a Claude skill or agent by running it live, repeatedly,
-and deciding pass/fail from a posterior over its true success rate — not from
-a single run or a brittle count threshold. It's built for evals whose outcome
-is genuinely non-deterministic: the same prompt can pass on one run and fail
-on the next, so the only honest verdict is a statistical one.
+Testing an AI skill or agent is not like testing ordinary code. The same
+prompt can pass on one run and fail on the next, so a single run tells you
+little: a lucky pass hides a flaky skill, and an unlucky fail condemns a good
+one. Fixed rules like "pass if 3 of 5 runs succeed" are brittle too — they
+ignore how much evidence you actually have, so they either waste runs or give
+verdicts you can't trust. Take that 3-of-5 rule at face value:
+
+- **It's a coin flip near the bar.** A skill whose true pass rate is exactly
+  60% passes the rule only about 68% of the time, and one at 50% still passes
+  50% of the time. Rerun the same eval and the verdict flips.
+- **It misjudges clearly good and clearly bad skills.** A skill that truly
+  passes 80% of the time fails the rule about 6% of the time; one that truly
+  passes only 30% of the time slips through about 16% of the time.
+- **It ignores how much you've seen.** 3 of 5 and 30 of 50 are the same ratio
+  but very different evidence, and the rule can't tell them apart. Nor can it
+  stop early: 5 passes in a row is already convincing, yet it still spends the
+  full 5 runs, and a borderline 3-of-5 gets no extra runs to settle it.
+- **Raising the count only trades one error for another.** Demanding 4 of 5
+  rejects more good skills; relaxing to 2 of 5 admits more bad ones. No fixed
+  count fixes the underlying problem, which is too few runs to know.
+
+`binom-eval` solves this by grading a skill or agent statistically. It runs it
+live, repeatedly, and decides pass/fail from a posterior over its true success
+rate, stopping once the evidence is strong enough either way.
+
+`binom-eval` is not tied to one vendor. It drives the skill or agent through a
+pluggable **backend** (a `Runner` for whichever AI harness you use) and grades
+the results the same way regardless of which one produced them. Claude
+(`claude -p`) and Cursor are the two backends included, and they serve as the
+examples throughout this README; adding another harness means implementing a
+`Runner` for it.
 
 ## The idea
 
-Each graded check is a **Bernoulli trial**: on any single `claude -p` run the
+Each graded check is a **Bernoulli trial**: on any single run (e.g. one `claude -p` call) the
 skill either satisfies the assertion (with unknown true pass rate `θ`) or it
 doesn't. We never observe `θ` — only `k` passes out of `n` trials. So instead
 of thresholding a raw count, `binom-eval` puts a posterior on `θ` and asks how
@@ -36,7 +62,7 @@ much of it clears a target rate.
   force a minimum sample before early stopping is allowed.
 - **Concurrency:** the evals in a suite are driven in parallel, and each fans
   its trial batches out too. A single shared semaphore
-  (`--live-eval-concurrency`, default 5) caps total in-flight `claude -p` calls
+  (`--live-eval-concurrency`, default 5) caps total in-flight backend calls (e.g. `claude -p`)
   across the whole session, so load and API-rate pressure stay bounded no
   matter how large the suite; set it to `1` to run fully serially. Skills that
   **write** to the working tree need `--live-eval-isolate`, which runs each
@@ -53,7 +79,7 @@ much of it clears a target rate.
   global ceiling.
 
 Evals are non-deterministic by design and are **never cached**: every trial is
-a fresh live `claude -p` call, so the suite measures the model's run-to-run
+a fresh live backend call (e.g. `claude -p`), so the suite measures the model's run-to-run
 variance. Deterministic checks belong in an ordinary unit suite.
 
 ## Worked example
@@ -202,8 +228,9 @@ Installing registers a pytest plugin, so the `--live-eval-target-rate`,
 `--live-eval-failure-max-chars`, `--live-eval-show-posterior`,
 `--live-eval-verbose`, `--live-eval-timeout`, and `--live-eval-progress`
 options and the
-`live_eval` marker become available to your test suite with no extra wiring. Live evals require the `claude` CLI on
-`PATH`; when it's absent the fixture skips rather than fails.
+`live_eval` marker become available to your test suite with no extra wiring. Live evals require the CLI of the backend you select (e.g. `claude` for
+`claude:`, the Cursor CLI for `cursor:`) on `PATH`; when it's absent the fixture
+skips rather than fails.
 
 ## Usage
 
@@ -228,7 +255,7 @@ from binom_eval import bind_eval_runs_fixture
 from ._assertions import ASSERTION_HANDLERS
 
 EVAL_DIR = Path(__file__).resolve().parent
-SKILL_NAME = EVAL_DIR.parent.name          # the skill Claude loads
+SKILL_NAME = EVAL_DIR.parent.name          # the skill the harness loads
 
 eval_runs = bind_eval_runs_fixture(
     EVAL_DIR, SKILL_NAME, ASSERTION_HANDLERS,
@@ -254,7 +281,8 @@ register_live_eval_tests(
 ```
 
 Run the live suite. `--live-eval-model` has no default and is **required**
-(format `backend:model`; known backends: `claude`, `cursor`) — every example
+(format `backend:model`; built-in backends: `claude` and `cursor`, shown as
+examples — any harness with a `Runner` can be plugged in) — every example
 below includes it:
 
 ```bash
@@ -291,8 +319,8 @@ pytest path/to/evals -m live_eval --live-eval-model claude:claude-haiku-4-5-2025
     --live-eval-progress
 ```
 
-An unknown model is rejected before any trial runs. For the `claude` backend
-the harness queries the Anthropic Models API to validate the model and, when
+An unknown model is rejected before any trial runs. Validation is per-backend;
+for example, for the `claude` backend the harness queries the Anthropic Models API to validate the model and, when
 the model is not found, includes the list of valid models in the error:
 
 ```
@@ -342,13 +370,14 @@ consider_namespace_packages = true
 
 - Python ≥ 3.11
 - `pytest` ≥ 7.0 (a runtime dependency — the package *is* a pytest plugin)
-- the `claude` CLI on `PATH` for live evals (unit tests need neither)
+- the CLI of your chosen backend on `PATH` for live evals — e.g. `claude` or
+  Cursor's CLI (unit tests need neither)
 
 ## Development
 
 ```bash
-make test        # fast unit suite (no live `claude -p` calls)
-make test-all    # every test, including live evals (needs `claude` on PATH)
+make test        # fast unit suite (no live backend calls)
+make test-all    # every test, including live evals (needs the backend CLI, e.g. `claude`, on PATH)
 make help        # list all targets
 ```
 
