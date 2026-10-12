@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "binom-eval"
 dynamic = ["version"]
-description = "Bayesian (Beta-binomial) grading for AI skill / agent evals run via `claude -p`."
+description = "Bayesian (Beta-binomial) grading for AI skill / agent evals, on any AI harness (Claude, Cursor, ...)."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 authors = [{ name = "Noel Yap", email = "noel.yap@qad.com" }]
-keywords = ["evals", "bayesian", "beta-binomial", "claude", "agents", "skills", "pytest"]
+keywords = ["evals", "bayesian", "beta-binomial", "claude", "cursor", "agents", "skills", "pytest"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: Pytest",
@@ -49,7 +49,7 @@ packages = ["src/binom_eval"]
 
 [tool.pytest.ini_options]
 # A bare `pytest` runs only the fast unit suite. The `live_eval` marker is
-# registered by the plugin; exclude live (real `claude -p`) runs anywhere
+# registered by the plugin; exclude live (real backend) runs anywhere
 # with `-m 'not live_eval'`.
 testpaths = ["tests"]
 # importlib mode + namespace packages let several eval dirs be collected in
