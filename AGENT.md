@@ -83,28 +83,42 @@ The package version is **derived from the git tag** via `hatch-vcs`
 source = "vcs"`). There is no version field to edit and no `chore(release)`
 bump commit — the tag is the single source of truth.
 
-```bash
-make release-dry              # preview the next version + notes, no tag
-make release                  # infer the bump from commits, tag, and push
-make release BUMP=minor       # force a level (major|minor|patch)
-make release BUMP=2.1.0       # or an explicit version
+Releases are automatic: every push to `main` that has commits since the last
+tag cuts the next version and publishes it. You do not run anything by hand.
+
+```
+push to main
+  └─ release.yml / tag      scripts/release.sh --ci: infer bump, create + push vX.Y.Z
+       └─ build             checkout the new tag, uv build, verify tag == wheel version
+            └─ github-release   publish the GitHub Release (auto-generated notes)
 ```
 
-`scripts/release.sh` (what these targets run) verifies the tree is clean, on
-`main`, and in sync with the remote, then infers the bump from the Conventional
-Commits since the last tag (`type!:` / `BREAKING CHANGE:` → major, `feat` →
-minor, else patch — major stays 0 while pre-1.0), creates an annotated
-`vX.Y.Z` tag, and pushes it to `upstream` (falling back to `origin`). It does
-**not** merge anything — land your changes on `main` first.
+- **Bump rule** (`scripts/release.sh`, the only implementation): a `type!:` subject
+  or `BREAKING CHANGE:` footer → major (minor while pre-1.0); any `feat` → minor;
+  otherwise → patch. Major stays 0 while pre-1.0.
+- **Nothing to release:** a push with no commits since the last tag (for example a
+  re-run of an already-released commit) skips cleanly. Every other push releases,
+  including `chore`/`docs`/`ci`/`test` commits, which get a patch bump.
+- **Concurrency:** releases are serialized by a workflow-level `concurrency`
+  group. Queued runs are not cancelled, so a release in progress is never cut off.
+- **Why the publish jobs run in the same run:** a tag pushed with `GITHUB_TOKEN`
+  does not start other workflows, so `build` and `github-release` run against the
+  tag inside the run that created it.
+- **Hand-cut tags still work:** pushing a `vX.Y.Z` tag yourself (e.g.
+  `git push origin v0.1.0`) skips `tag` and runs `build` and `github-release`
+  against that tag. The `tag` job only runs for branch pushes, and a tag already on
+  `HEAD` makes it skip, so one commit is never released twice.
+- **Manual run:** `make release-dry` previews the next version without tagging.
+  `make release` (or `make release BUMP=minor|major|patch|X.Y.Z`) cuts a release
+  from your machine. It refuses to run unless the tree is clean and `main` is in
+  sync with the remote. Use it only for an out-of-band version, since main pushes
+  already release.
 
-Pushing the tag triggers `.github/workflows/release.yml`, which builds the
-sdist + wheel (version resolved from the tag) and publishes the GitHub Release
-with auto-generated notes.
-
-> **Invariant:** a tag-triggered run uses `release.yml` **as it exists at the
-> tagged commit**. Any change to the release workflow must be merged to `main`
-> *before* you cut the next tag, or that release runs the old workflow. If a
-> release's automation fails, the git tag is still valid — build locally
+> **Invariant:** each run uses `release.yml` **as it exists at the commit that
+> triggered it** (the pushed commit on `main`, or the tagged commit for a
+> hand-cut tag). A change to the release workflow therefore takes effect with the
+> push that merges it, and a hand-cut tag keeps the workflow it points at. If the
+> automation fails after the tag is pushed, the tag is still valid. Build locally
 > (`uv build`) and publish by hand with
 > `gh release create vX.Y.Z --generate-notes dist/*`.
 
