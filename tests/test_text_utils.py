@@ -4,7 +4,7 @@
 citation-fence desynchronization regression; `first_line` is exercised
 through the per-skill `_assertions.py` suites, and the skill-independent
 `missing_from`, `comment_mark_re`, `marked_regions`, `comment_sections`,
-and `before_after_snippets` (the bracketed `BEGIN/END BEFORE` and
+`without_input_echo`, `before_after_or_echo`, and `before_after_snippets` (the bracketed `BEGIN/END BEFORE` and
 `BEGIN/END AFTER` sentinel markers) are tested here.
 """
 
@@ -26,6 +26,8 @@ from binom_eval import (
     has_code_blocks,
     marked_regions,
     missing_from,
+    without_input_echo,
+    before_after_or_echo,
 )
 
 
@@ -460,3 +462,98 @@ class TestBeforeAfterPromptInstruction:
         assert END_BEFORE_MARKER in BEFORE_AFTER_PROMPT_INSTRUCTION
         assert BEGIN_AFTER_MARKER in BEFORE_AFTER_PROMPT_INSTRUCTION
         assert END_AFTER_MARKER in BEFORE_AFTER_PROMPT_INSTRUCTION
+
+
+class TestWithoutInputEcho:
+    _SOURCE = "class A {\n    func f() { B.shared.go() }\n}"
+    _REFACTORED = "class A {\n    func f() { b.go() }\n}"
+
+    def test_drops_a_block_that_quotes_the_source_verbatim(self):
+        assert without_input_echo([self._SOURCE, self._REFACTORED], self._SOURCE) == [
+            self._REFACTORED
+        ]
+
+    def test_keeps_blocks_in_their_original_order(self):
+        extra = "protocol P {}"
+        assert without_input_echo(
+            [self._SOURCE, extra, self._REFACTORED], self._SOURCE
+        ) == [extra, self._REFACTORED]
+
+    def test_ignores_trailing_whitespace_and_surrounding_blank_lines(self):
+        echoed = "\n" + self._SOURCE.replace("{\n", "{  \n") + "\n\n"
+        assert without_input_echo([echoed, self._REFACTORED], self._SOURCE) == [
+            self._REFACTORED
+        ]
+
+    def test_keeps_a_block_that_only_contains_the_source(self):
+        combined = self._SOURCE + "\n\nprotocol P {}"
+        assert without_input_echo([combined], self._SOURCE) == [combined]
+
+    def test_keeps_a_block_with_a_changed_token(self):
+        edited = self._SOURCE.replace("go()", "stop()")
+        assert without_input_echo([edited, self._REFACTORED], self._SOURCE) == [
+            edited,
+            self._REFACTORED,
+        ]
+
+    def test_returns_every_block_when_all_are_echoes(self):
+        assert without_input_echo([self._SOURCE, self._SOURCE], self._SOURCE) == [
+            self._SOURCE,
+            self._SOURCE,
+        ]
+
+    def test_returns_blocks_unchanged_when_source_is_empty(self):
+        assert without_input_echo([self._REFACTORED], "  \n") == [self._REFACTORED]
+
+    def test_returns_empty_list_for_no_blocks(self):
+        assert without_input_echo([], self._SOURCE) == []
+
+
+class TestBeforeAfterOrEcho:
+    _SOURCE = "class A {\n    func f() { B.shared.go() }\n}"
+    _REFACTORED = "class A {\n    func f() { b.go() }\n}"
+
+    def test_uses_markers_when_present(self):
+        block = (
+            "// <<<BEGIN BEFORE>>> //\nold\n// <<<END BEFORE>>> //\n"
+            "// <<<BEGIN AFTER>>> //\nnew\n// <<<END AFTER>>> //"
+        )
+        assert before_after_or_echo([block], self._SOURCE) == ("old", "new")
+
+    def test_trusts_markers_even_when_a_side_is_unmarked(self):
+        block = "// <<<BEGIN AFTER>>> //\nnew\n// <<<END AFTER>>> //"
+        assert before_after_or_echo([self._SOURCE, block], self._SOURCE) == (
+            None,
+            "new",
+        )
+
+    def test_recovers_both_sides_from_an_echo_without_markers(self):
+        assert before_after_or_echo(
+            [self._SOURCE, self._REFACTORED], self._SOURCE
+        ) == (self._SOURCE, self._REFACTORED)
+
+    def test_before_is_none_when_nothing_echoes_the_source(self):
+        assert before_after_or_echo([self._REFACTORED], self._SOURCE) == (
+            None,
+            self._REFACTORED,
+        )
+
+    def test_after_joins_the_non_echo_blocks(self):
+        assert before_after_or_echo(
+            [self._SOURCE, "protocol P {}", self._REFACTORED], self._SOURCE
+        ) == (self._SOURCE, "protocol P {}\n" + self._REFACTORED)
+
+    def test_unchanged_answer_still_yields_an_after(self):
+        assert before_after_or_echo([self._SOURCE], self._SOURCE) == (
+            self._SOURCE,
+            self._SOURCE,
+        )
+
+    def test_no_blocks_yields_nothing(self):
+        assert before_after_or_echo([], self._SOURCE) == (None, None)
+
+    def test_empty_source_never_counts_as_an_echo(self):
+        assert before_after_or_echo([self._REFACTORED], "  \n") == (
+            None,
+            self._REFACTORED,
+        )

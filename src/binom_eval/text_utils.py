@@ -18,6 +18,11 @@ delineators, for skills that ask a model to bracket its original and
 refactored code in exact-match begin/end marker pairs rather than an
 arbitrary phrase; `BEFORE_AFTER_PROMPT_INSTRUCTION` is the prompt-side
 wording that tells the model to emit those markers.
+`without_input_echo` drops a fenced block that merely quotes the eval's own
+input back, for models that show the original code before the refactor
+without using the sentinel markers. `before_after_or_echo` is the one call
+that returns `(before, after)` either way: the markers when the model emitted
+them, the echo of the eval's input otherwise.
 """
 
 from __future__ import annotations
@@ -408,3 +413,86 @@ def before_after_snippets(text: str) -> tuple[str | None, str | None]:
         _bracketed_region(text, _BEGIN_BEFORE_RE, _END_BEFORE_RE),
         _bracketed_region(text, _BEGIN_AFTER_RE, _END_AFTER_RE),
     )
+
+
+def _normalized(code: str) -> str:
+    """`code` with trailing whitespace stripped per line and leading and
+    trailing blank lines removed, so an echoed block compares equal to
+    its source despite a stripped trailing newline or editor-trimmed
+    spaces."""
+    return "\n".join(line.rstrip() for line in code.strip("\r\n").splitlines())
+
+
+def without_input_echo(blocks: list[str], source: str) -> list[str]:
+    """`blocks` minus any block that is verbatim `source`.
+
+    A model asked to refactor code often quotes the original in its own
+    fenced block ("Before") ahead of the refactored one. Joining every
+    block then makes a check that grades the *refactored* code see the
+    original too, and flag a violation the model already fixed. Dropping
+    blocks that merely repeat the eval's input (`EvalRun.prompt_input`)
+    keeps only code the model wrote. This complements
+    `before_after_snippets`, which needs the model to emit sentinel
+    markers; this works when it does not.
+
+    Blocks are compared after `_normalized`, so trailing whitespace and
+    surrounding blank lines do not defeat the match, but any other
+    difference (a changed token, a partial quote) keeps the block -- a
+    block that only *contains* the source, or part of it, is not an echo.
+
+    If every block is an echo (the model returned the input unchanged),
+    all of `blocks` is returned, never an empty list: an unchanged answer
+    must still be graded as the unchanged code it is, so a check cannot
+    pass vacuously on nothing.
+
+    Args:
+      blocks: Block bodies, e.g. from `code_blocks` or `fenced_blocks`.
+      source: The eval's input code to treat as an echo when repeated
+        verbatim; typically `EvalRun.prompt_input`.
+
+    Returns:
+      `blocks` in their original order, without echoes of `source`
+      unless that would leave none.
+    """
+    target = _normalized(source)
+    if not target:
+        return list(blocks)
+    kept = [block for block in blocks if _normalized(block) != target]
+    return kept or list(blocks)
+
+
+def before_after_or_echo(
+    blocks: list[str], source: str
+) -> tuple[str | None, str | None]:
+    """The `(before, after)` code of a response, with or without markers.
+
+    If the model emitted any of the `BEGIN/END BEFORE/AFTER` sentinel
+    markers, it followed the `BEFORE_AFTER_PROMPT_INSTRUCTION` protocol and
+    the markers are trusted as-is: the result is exactly
+    `before_after_snippets` of the blocks joined by newlines, including a
+    `None` for a side it left unmarked.
+
+    Otherwise the sides are recovered from the eval's own input:
+    - `before` is `source` when some block echoes it verbatim (compared as
+      `without_input_echo` does), else `None`;
+    - `after` is the remaining blocks joined by newlines, i.e. the code the
+      model wrote. If every block is an echo, `after` is that unchanged
+      code, never `None`, so a check on it cannot pass vacuously. `None`
+      only when there are no blocks.
+
+    Args:
+      blocks: Block bodies, e.g. from `code_blocks` or `fenced_blocks`.
+      source: The eval's input code; typically `EvalRun.prompt_input`.
+
+    Returns:
+      `(before, after)`; either is `None` when it cannot be determined.
+    """
+    marked = before_after_snippets("\n".join(blocks))
+    if marked != (None, None):
+        return marked
+    if not blocks:
+        return None, None
+    target = _normalized(source)
+    echoed = bool(target) and any(_normalized(b) == target for b in blocks)
+    after = "\n".join(without_input_echo(blocks, source))
+    return (source if echoed else None), after
