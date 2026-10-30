@@ -16,7 +16,8 @@ only as many trials as the verdict needs. The package is split by concern:
     `BEGIN/END AFTER` sentinel markers with `before_after_snippets` for
     extracting a before/refactor region pair and
     `BEFORE_AFTER_PROMPT_INSTRUCTION` for requesting the markers in
-    prompts).
+    prompts, and `without_input_echo` for dropping a block that merely
+    quotes the eval's input back).
   * `stream_json` -- the `EvalRun` dataclass and `parse_stream_json`, which
     turn one `claude -p` run's stdout into an `EvalRun`.
   * `runner` -- the subprocess/env layer: the `Runner` backends
@@ -141,6 +142,7 @@ from binom_eval.text_utils import (
     END_AFTER_MARKER,
     END_BEFORE_MARKER,
     NAMED_FN_RE,
+    before_after_or_echo,
     before_after_snippets,
     code_blocks,
     comment_mark_re,
@@ -152,6 +154,7 @@ from binom_eval.text_utils import (
     has_code_blocks,
     marked_regions,
     missing_from,
+    without_input_echo,
 )
 
 __all__ = [
@@ -163,6 +166,7 @@ __all__ = [
     "END_AFTER_MARKER",
     "END_BEFORE_MARKER",
     "NAMED_FN_RE",
+    "before_after_or_echo",
     "before_after_snippets",
     "code_blocks",
     "comment_mark_re",
@@ -174,6 +178,7 @@ __all__ = [
     "has_code_blocks",
     "marked_regions",
     "missing_from",
+    "without_input_echo",
     # stream_json
     "EvalRun",
     "agent_invoked",
