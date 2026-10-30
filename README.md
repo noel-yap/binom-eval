@@ -385,13 +385,8 @@ make help        # list all targets
 args with `ARGS`, e.g. `make test ARGS="-k grading"`. The equivalent without
 make is `uv sync && uv run pytest -m 'not live_eval'`.
 
-To cut a release once your changes are on `main`:
-
-```bash
-make release-dry   # preview the next version, no tag
-make release       # infer the bump from commits, tag, and push
-```
-
-The version is derived from the git tag (`hatch-vcs`) — no manifest to bump.
-Pushing the tag publishes the GitHub Release automatically. See the
+Releases are automatic: every push to `main` cuts the next version from the
+Conventional Commits since the last tag and publishes the GitHub Release. The
+version is derived from the git tag (`hatch-vcs`) — no manifest to bump. To
+preview the next version without tagging, run `make release-dry`. See the
 **Releasing** section in [`AGENT.md`](AGENT.md) for the full flow.

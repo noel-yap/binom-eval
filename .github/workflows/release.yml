@@ -1,26 +1,78 @@
 name: Release
 
+# Two ways in, one pipeline:
+#   * A push to `main` runs `tag` first. It cuts the next vX.Y.Z tag with
+#     scripts/release.sh --ci, or does nothing when there is nothing to release.
+#     `build` and `github-release` then run in this same run against that tag.
+#     A tag pushed with GITHUB_TOKEN does not start another workflow run, so
+#     the new tag cannot trigger a second release.
+#   * A version tag pushed by a human (e.g. `git push origin v0.1.0`) skips
+#     `tag` and runs `build` and `github-release` against that tag.
 on:
   push:
-    # Release on annotated version tags, e.g. `v0.1.0`.
+    branches: [main]
+    # Hand-cut tags, e.g. `v0.1.0`.
     tags: ["v*"]
 
-# Least-privilege by default; the `github-release` job elevates to
-# `contents: write` so `softprops/action-gh-release` can create the Release.
-permissions:
-  contents: read
+# Serialize releases so overlapping merges cannot race on tagging. Queued runs
+# are not cancelled: cancelling mid-release could leave a tag with no Release.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+# No token permissions by default. Each job below grants only what it needs.
+permissions: {}
 
 jobs:
-  build:
-    name: Build sdist + wheel
+  tag:
+    name: Tag next version
+    # Only for pushes to main. A pushed tag also starts this workflow; skip it.
+    if: github.ref_type == 'branch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
-      prerelease: ${{ steps.version.outputs.prerelease }}
+      tag: ${{ steps.release.outputs.tag }}
     steps:
       - name: Checkout
-        # Full history + tags so hatch-vcs can derive the version from the tag.
         uses: actions/checkout@v4
         with:
+          # Full history + tags: the bump is inferred from commits since the
+          # last tag, and the tag is pushed with the persisted GITHUB_TOKEN.
+          fetch-depth: 0
+
+      - name: Cut release tag
+        id: release
+        env:
+          # Annotated tags need a tagger identity; runners have none by default.
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        # Writes `tag=` to $GITHUB_OUTPUT only when it creates a tag.
+        run: bash scripts/release.sh --ci
+
+  build:
+    name: Build sdist + wheel
+    needs: tag
+    # Runs after a successful `tag` step (main push that released), or directly
+    # for a pushed version tag. Skipped when `tag` found nothing to release.
+    if: >-
+      always() && needs.tag.result != 'failure' && needs.tag.result != 'cancelled'
+      && (github.ref_type == 'tag' || needs.tag.outputs.tag != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          # Check out the tag, not the branch: on a main push the tag was just
+          # created. Full history + tags so hatch-vcs can derive the version.
+          ref: ${{ github.ref_type == 'tag' && github.ref || format('refs/tags/{0}', needs.tag.outputs.tag) }}
           fetch-depth: 0
 
       - name: Install uv
@@ -40,13 +92,17 @@ jobs:
       # normalized version so the GitHub Release is flagged correctly.
       - name: Verify tag and classify version
         id: version
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || needs.tag.outputs.tag }}
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          tag="${TAG}"
+          version="${tag#v}"
           pkg="$(ls dist/*.whl | sed -E 's|.*/[A-Za-z0-9_.]+-([0-9][^-]*)-.*\.whl$|\1|' | head -1)"
-          if [ "${tag}" != "${pkg}" ]; then
-            echo "::error::tag v${tag} != built version ${pkg}" >&2
+          if [ "${version}" != "${pkg}" ]; then
+            echo "::error::tag ${tag} != built version ${pkg}" >&2
             exit 1
           fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           if [[ "${pkg}" =~ (a|b|rc|alpha|beta|dev|pre) ]]; then
             echo "prerelease=true" >> "${GITHUB_OUTPUT}"
           else
@@ -63,6 +119,7 @@ jobs:
   github-release:
     name: Publish GitHub Release
     needs: build
+    if: ${{ always() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -76,6 +133,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Explicit: on a main push GITHUB_REF_NAME is `main`, not the tag.
+          tag_name: ${{ needs.build.outputs.tag }}
           files: dist/*
           generate_release_notes: true
           prerelease: ${{ needs.build.outputs.prerelease == 'true' }}

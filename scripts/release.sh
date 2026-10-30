@@ -4,16 +4,26 @@
 # Commits since the last tag, create an annotated git tag, and push it.
 #
 # The package version is derived from the tag (hatch-vcs), so there is no
-# manifest to bump. Pushing the tag triggers the Release workflow, which builds
-# the sdist/wheel and publishes the GitHub Release.
+# manifest to bump. Pushing the tag starts the Release workflow's build and
+# publish jobs (.github/workflows/release.yml).
+#
+# This one script is the only implementation of the bump logic. Two callers:
+#   * a human, via `make release` / `make release-dry` (checks that the tree is
+#     clean and on an in-sync `main` before tagging);
+#   * the Release workflow's `tag` job, via `--ci`, on every push to `main`.
 #
 # Usage:
-#   scripts/release.sh [--dry-run] [major|minor|patch|<X.Y.Z>]
+#   scripts/release.sh [--dry-run] [--ci] [major|minor|patch|<X.Y.Z>]
 #
 # With no level/version the bump is inferred from the commits since the last
 # tag: a breaking change (a `type!:` subject or a `BREAKING CHANGE:` footer)
 # -> major (minor while the current major is 0), any `feat` -> minor, else
 # patch. `--dry-run` prints the computed version and notes without tagging.
+#
+# `--ci` is non-interactive and tags HEAD of the commit the workflow checked
+# out. It skips the branch and remote-sync checks, and exits 0 without tagging
+# when there are no commits since the last tag (HEAD is already released). On a
+# tag it writes `tag=<name>` to $GITHUB_OUTPUT so later jobs know what to build.
 
 set -euo pipefail
 
@@ -97,13 +107,31 @@ bump_version() {
   echo "${major}.${minor}.${patch}"
 }
 
+# Manual releases only: die unless HEAD is the in-sync tip of $MAIN_BRANCH.
+check_main_in_sync() {
+  local remote="$1"
+  local branch remote_head
+  branch="$(git branch --show-current)"
+  [[ "${branch}" == "${MAIN_BRANCH}" ]] \
+    || die "must release from '${MAIN_BRANCH}', on '${branch:-detached HEAD}'"
+  [[ -z "$(git status --porcelain)" ]] \
+    || die "working tree is not clean; commit or stash first"
+  git fetch --quiet "${remote}" "${MAIN_BRANCH}" \
+    || die "failed to fetch ${remote}/${MAIN_BRANCH}"
+  remote_head="$(git rev-parse FETCH_HEAD)"
+  [[ "$(git rev-parse HEAD)" == "${remote_head}" ]] \
+    || die "local ${MAIN_BRANCH} is not in sync with ${remote}/${MAIN_BRANCH}"
+}
+
 main() {
   local dry_run=0
+  local ci=0
   local requested=""
   local arg
   for arg in "$@"; do
     case "${arg}" in
       --dry-run) dry_run=1 ;;
+      --ci) ci=1 ;;
       major|minor|patch) requested="${arg}" ;;
       v[0-9]*.[0-9]*.[0-9]* | [0-9]*.[0-9]*.[0-9]*) requested="${arg}" ;;
       "") ;;
@@ -111,25 +139,22 @@ main() {
     esac
   done
 
+  if (( ci )); then
+    [[ -n "${GITHUB_OUTPUT:-}" ]] || die "--ci requires GITHUB_OUTPUT"
+  fi
+
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     || die "not inside a git work tree"
 
-  local branch
-  branch="$(git branch --show-current)"
-  [[ "${branch}" == "${MAIN_BRANCH}" ]] \
-    || die "must release from '${MAIN_BRANCH}', on '${branch:-detached HEAD}'"
-
-  [[ -z "$(git status --porcelain)" ]] \
-    || die "working tree is not clean; commit or stash first"
-
-  local remote remote_head
+  local remote
   remote="$(tag_remote)"
-  git fetch --quiet "${remote}" "${MAIN_BRANCH}" \
-    || die "failed to fetch ${remote}/${MAIN_BRANCH}"
-  remote_head="$(git rev-parse FETCH_HEAD)"
+  if (( ! ci )); then
+    check_main_in_sync "${remote}"
+  else
+    [[ -z "$(git status --porcelain)" ]] \
+      || die "working tree is not clean"
+  fi
   git fetch --quiet --tags "${remote}" || die "failed to fetch tags"
-  [[ "$(git rev-parse HEAD)" == "${remote_head}" ]] \
-    || die "local ${MAIN_BRANCH} is not in sync with ${remote}/${MAIN_BRANCH}"
 
   local prev prefix current
   prev="$(latest_tag)"
@@ -143,8 +168,14 @@ main() {
 
   local subjects
   subjects="$(commit_subjects "${prev}")"
-  [[ -n "${subjects}" ]] \
-    || die "no commits since ${prev:-repo start}; nothing to release"
+  if [[ -z "${subjects}" ]]; then
+    # HEAD is already released (the nearest tag is at HEAD) or the repo is empty.
+    if (( ci )); then
+      err "no commits since ${prev:-repo start}; nothing to release"
+      return 0
+    fi
+    die "no commits since ${prev:-repo start}; nothing to release"
+  fi
 
   local next
   if [[ -z "${requested}" ]]; then
@@ -178,6 +209,9 @@ main() {
   git tag -a "${new_tag}" -m "${message}"
   git push "${remote}" "${new_tag}"
   echo "Tagged ${new_tag} and pushed to ${remote}; the Release workflow will publish it."
+  if (( ci )); then
+    echo "tag=${new_tag}" >> "${GITHUB_OUTPUT}"
+  fi
 }
 
 main "$@"
