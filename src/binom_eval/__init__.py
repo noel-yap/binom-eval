@@ -51,7 +51,7 @@ Stdlib + pytest only.
 from __future__ import annotations
 
 from binom_eval.grading import (
-    BATCH_FLOOR,
+    BATCH_MAX,
     FAILURE_SECTION_MAX_CHARS,
     FAIL_THRESHOLD,
     PASS_THRESHOLD,
@@ -203,7 +203,7 @@ __all__ = [
     # grading
     "AssertionFailure",
     "TrialFailure",
-    "BATCH_FLOOR",
+    "BATCH_MAX",
     "FAILURE_SECTION_MAX_CHARS",
     "FAIL_THRESHOLD",
     "PASS_THRESHOLD",

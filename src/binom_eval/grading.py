@@ -23,7 +23,7 @@ Two concerns live here. First, the adaptive driver: `_eval_checks` derives
 the pass/fail checks for an eval, `next_batch_size` decides how many more
 trials are worth running given the posterior so far, and `run_eval_adaptive`
 loops the two until the verdict is fixed -- capping cost at `MAX_TRIALS`
-runs while spending as few as `BATCH_FLOOR` when a clean streak settles it.
+runs, in batches of at most `BATCH_MAX` trials.
 Second, the grading rollups (`trial_outcomes`, `eval_passed`,
 `trial_outcomes_passed`, `trial_outcomes_failure_message`, `failing_assertions`,
 `trigger_pass_counts`) that
@@ -54,7 +54,7 @@ from binom_eval.reporting import (
     trigger_pass_counts,
 )
 from binom_eval.driver import (
-    BATCH_FLOOR, _check_failures, _eval_checks, _no_other_skill_check,
+    BATCH_MAX, _check_failures, _eval_checks, _no_other_skill_check,
     _resolve_shortfall, _trigger_check, next_batch_size, run_eval_adaptive,
 )
 from binom_eval.progress import (

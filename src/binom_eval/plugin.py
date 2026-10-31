@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from binom_eval.grading import (
+    BATCH_MAX,
     FAILURE_SECTION_MAX_CHARS,
     PASS_THRESHOLD,
     _eval_checks,
@@ -36,18 +37,18 @@ from binom_eval.stream_json import EvalRun
 # Budget ceiling: the most trials any single eval will ever run. A verdict
 # usually locks well before this; it only bites for skills sitting right at
 # the target rate, which are genuinely undecidable. 21 = 3 * 7 divides evenly
-# by BATCH_FLOOR, so the worst case is a clean seven rounds of three.
+# by BATCH_MAX, so a run of full-size batches exhausts it with no ragged one.
 DEFAULT_MAX_TRIALS = 21
 
 # Minimum trials per eval before the adaptive driver may stop early once the
-# posterior locks. Zero means no floor beyond BATCH_FLOOR's opening batch.
+# posterior locks. Zero means no floor beyond the driver's own batches.
 DEFAULT_MIN_TRIALS = 0
 
 # How many `claude -p` runs may be in flight at once across the whole session.
 # Evals are driven in parallel and each fans its trials out too, so this single
 # ceiling -- enforced by one shared semaphore threaded through every run --
 # bounds total live calls regardless of suite size, keeping local load and API
-# rate pressure in check. Sitting just above `BATCH_FLOOR` (3), it leaves room
+# rate pressure in check. Sitting just above `BATCH_MAX` (3), it leaves room
 # for a second eval to keep the gate warm through another's re-grading gap
 # rather than letting one eval's opening batch monopolize it. Raise it to
 # finish faster when the API and machine can take it; drop it to 1 to run
@@ -177,8 +178,20 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help=(
             "Minimum trials per eval before the adaptive driver may stop "
             "early once the posterior locks. Default "
-            f"{DEFAULT_MIN_TRIALS} (no minimum beyond the batch floor). "
+            f"{DEFAULT_MIN_TRIALS} (no minimum beyond the driver's own batches). "
             "Must not exceed --live-eval-max-trials."
+        ),
+    )
+    parser.addoption(
+        "--live-eval-batch-max",
+        action="store",
+        type=int,
+        default=BATCH_MAX,
+        help=(
+            "Per-batch ceiling: the most trials fired in one round while a "
+            "verdict is still open (each round runs the trials needed to "
+            "settle the slowest undetermined check, capped here and by the "
+            f"remaining budget). Must be >= 1. Default {BATCH_MAX}."
         ),
     )
     parser.addoption(
@@ -419,6 +432,12 @@ def make_eval_runs_fixture(
                 f"--live-eval-max-trials ({max_trials})",
                 pytrace=False,
             )
+        batch_max = pytestconfig.getoption("--live-eval-batch-max")
+        if batch_max < 1:
+            pytest.fail(
+                f"--live-eval-batch-max must be >= 1, got {batch_max}",
+                pytrace=False,
+            )
         target = pytestconfig.getoption("--live-eval-target-rate")
         pass_threshold = pytestconfig.getoption("--live-eval-pass-threshold")
         if not 0.5 < pass_threshold < 1.0:
@@ -461,6 +480,9 @@ def make_eval_runs_fixture(
             # Forwarded only when set, so an injected `run_adaptive` written
             # before `isolate_skill` existed keeps working.
             extra = {} if isolate_skill is None else {"isolate_skill": isolate_skill}
+            # Likewise `batch_max`, forwarded only when overridden.
+            if batch_max != BATCH_MAX:
+                extra["batch_max"] = batch_max
             return run_adaptive(
                 item,
                 repo_root,

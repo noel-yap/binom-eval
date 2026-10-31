@@ -13,11 +13,10 @@ from binom_eval.assertions import assert_check
 from binom_eval.reporting import graded_runs, trial_outcomes
 from binom_eval.progress import ProgressEvent, ProgressRenderer
 
-# Smallest batch to fire while a verdict is still open. Flooring the
-# optimistic shortfall keeps early rounds fanned out for concurrency and --
-# because it forces a representative sample before the posterior is allowed
-# to commit -- markedly cuts the chance an unlucky streak fails a good skill.
-BATCH_FLOOR = 3
+# Largest batch to fire while a verdict is still open. Capping the optimistic
+# shortfall keeps each round small, so the posterior is re-graded often and
+# trials are not spent past the point a verdict could lock.
+BATCH_MAX = 3
 
 
 def _trigger_check(run: EvalRun) -> None:
@@ -166,6 +165,7 @@ def next_batch_size(
     *,
     pass_threshold: float = PASS_THRESHOLD,
     min_trials: int = 0,
+    batch_max: int = BATCH_MAX,
 ) -> int:
     """How many trials to run next, or 0 once the verdict is fixed.
 
@@ -179,8 +179,9 @@ def next_batch_size(
         trials that could settle it either way;
       * the eval needs every check settled, so the batch takes the *largest*
         such shortfall;
-      * floored at `BATCH_FLOOR` (keeps early rounds fanned out and resists
-        unlucky-streak verdicts) and capped by the remaining budget.
+      * capped at `batch_max` (default `BATCH_MAX`; keeps each round small so the posterior is
+        re-graded often) and by the remaining budget. There is no minimum:
+        when the largest shortfall is 1 or 2, the batch is that size.
 
     `run_eval_adaptive` re-grades after each batch, so the next one shrinks
     as the posteriors converge. Errored trials count against the budget
@@ -223,7 +224,8 @@ def next_batch_size(
             )
     if not shortfalls:  # every check locked PASS (or there are no checks).
         return stop_batch
-    return min(max(max(shortfalls), BATCH_FLOOR), remaining)
+    needed = max(shortfalls)
+    return min(needed, batch_max, remaining)
 
 
 def run_eval_adaptive(
@@ -236,6 +238,7 @@ def run_eval_adaptive(
     *,
     pass_threshold: float = PASS_THRESHOLD,
     min_trials: int = 0,
+    batch_max: int = BATCH_MAX,
     gate: threading.Semaphore | None = None,
     isolate: bool = False,
     isolate_skill: tuple[Path, ...] | None = None,
@@ -251,8 +254,8 @@ def run_eval_adaptive(
     Each round runs `next_batch_size` trials concurrently and re-grades,
     looping until every check's posterior has locked PASS, one has locked
     FAIL, or the `max_trials` budget is spent. This caps cost at `max_trials`
-    runs and spends as few as `BATCH_FLOOR` when a clean streak settles every
-    check, over however many rounds the outcomes require.
+    runs, in rounds of at most `batch_max` trials, over however many rounds
+    the outcomes require.
 
     `gate`, `isolate`, `isolate_skill`, `model`, `runner`, and `timeout` are
     forwarded to
@@ -280,6 +283,7 @@ def run_eval_adaptive(
         target,
         pass_threshold=pass_threshold,
         min_trials=min_trials,
+        batch_max=batch_max,
     )
     # Forwarded only when set, so an injected `batch_runner` written before
     # `isolate_skill` existed keeps working.
@@ -326,6 +330,7 @@ def run_eval_adaptive(
             target,
             pass_threshold=pass_threshold,
             min_trials=min_trials,
+            batch_max=batch_max,
         )
     if on_progress is not None:
         on_progress.render(

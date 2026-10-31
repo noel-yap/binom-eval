@@ -23,7 +23,7 @@ from binom_eval import (
 )
 from binom_eval.stream_json import EvalRun
 from binom_eval.grading import (
-    BATCH_FLOOR,
+    BATCH_MAX,
     FAIL_THRESHOLD,
     FAILURE_SECTION_MAX_CHARS,
     PASS_THRESHOLD,
@@ -73,6 +73,11 @@ class TestPytestAddOption:
     def test_min_trials_defaults_to_constant_and_is_int(self) -> None:
         opt = self._options()["--live-eval-min-trials"]
         assert opt["default"] == DEFAULT_MIN_TRIALS
+        assert opt["type"] is int
+
+    def test_batch_max_defaults_to_constant_and_is_int(self) -> None:
+        opt = self._options()["--live-eval-batch-max"]
+        assert opt["default"] == BATCH_MAX
         assert opt["type"] is int
 
     def test_target_rate_defaults_to_constant_and_is_float(self) -> None:
@@ -151,10 +156,10 @@ class TestDefaults:
     def test_target_rate_sits_inside_the_unit_interval(self) -> None:
         assert 0.0 < DEFAULT_TARGET_RATE < 1.0
 
-    def test_max_trials_is_a_whole_number_of_floored_batches(self) -> None:
-        # 21 = 3 * 7, so the worst case is a clean run of BATCH_FLOOR-sized
-        # rounds with no ragged remainder.
-        assert DEFAULT_MAX_TRIALS % BATCH_FLOOR == 0
+    def test_max_trials_is_a_whole_number_of_capped_batches(self) -> None:
+        # 21 = 3 * 7, so full-size BATCH_MAX rounds exhaust it with no
+        # ragged remainder.
+        assert DEFAULT_MAX_TRIALS % BATCH_MAX == 0
 
     def test_band_is_symmetric_about_one_half(self) -> None:
         assert abs((PASS_THRESHOLD + FAIL_THRESHOLD) - 1.0) < 1e-12
@@ -181,12 +186,14 @@ class _StubConfig:
         model: str | None = "claude:haiku",
         pass_threshold: float = PASS_THRESHOLD,
         min_trials: int = DEFAULT_MIN_TRIALS,
+        batch_max: int = BATCH_MAX,
         progress: bool = False,
         timeout: int = DEFAULT_TRIAL_TIMEOUT,
     ) -> None:
         self._options = {
             "--live-eval-max-trials": max_trials,
             "--live-eval-min-trials": min_trials,
+            "--live-eval-batch-max": batch_max,
             "--live-eval-target-rate": target,
             "--live-eval-pass-threshold": pass_threshold,
             "--live-eval-concurrency": concurrency,
@@ -323,6 +330,54 @@ class TestMakeEvalRunsFixture:
             self._fixture_fn()(
                 _StubConfig(10, 2.0 / 3.0, min_trials=11)
             )
+
+    def test_fails_when_batch_max_below_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            plugin,
+            "resolve_runner",
+            lambda _spec: ("claude", "m", _FakeRunner()),
+        )
+        with pytest.raises(pytest.fail.Exception, match="batch-max"):
+            self._fixture_fn()(_StubConfig(10, 2.0 / 3.0, batch_max=0))
+
+    def test_forwards_custom_batch_max_to_adaptive(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            plugin,
+            "resolve_runner",
+            lambda _spec: ("claude", "m", _FakeRunner()),
+        )
+        monkeypatch.setattr(
+            plugin,
+            "load_evals",
+            lambda _path, _handlers: [{"id": "e1", "assertions": []}],
+        )
+        calls: list[int] = []
+
+        def fake_adaptive(
+            item: dict[str, Any],
+            *args: Any,
+            batch_max: int = BATCH_MAX,
+            **kwargs: Any,
+        ) -> list[EvalRun]:
+            calls.append(batch_max)
+            return [
+                EvalRun(
+                    eval_id=item["id"],
+                    prompt="",
+                    skill_invoked=False,
+                    assistant_text="",
+                )
+            ]
+
+        self._fixture_fn(run_adaptive=fake_adaptive)(
+            _StubConfig(21, 2.0 / 3.0, batch_max=5)
+        )
+
+        assert calls == [5]
 
     def test_builds_runs_keyed_by_eval_id_when_cli_present(
         self, monkeypatch: pytest.MonkeyPatch
