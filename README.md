@@ -242,7 +242,8 @@ A skill's eval suite supplies four things and lets `binom-eval` do the rest:
    Expanded prompts also carry the conditional before/after marker
    instruction (`BEFORE_AFTER_PROMPT_INSTRUCTION`), so a model that shows
    original and refactored code delimits them with the framework's
-   sentinel markers;
+   sentinel markers, with all code and only code (no commentary) inside
+   them;
 2. **assertion handlers** — `dict[str, Callable[[EvalRun], None]]`, each
    raising `AssertionFailure` on failure;
 3. a **`conftest.py`** that binds the `eval_runs` fixture; and

@@ -55,9 +55,9 @@ BEFORE_AFTER_PROMPT_INSTRUCTION = (
     " refactored code, delimit them with these exact marker"
     f" lines: the original between `{BEGIN_BEFORE_MARKER}` and"
     f" `{END_BEFORE_MARKER}`, and the refactored code between"
-    f" `{BEGIN_AFTER_MARKER}` and `{END_AFTER_MARKER}`. Put only"
-    " code between the markers, with no commentary, narration, or"
-    " explanation; put any explanation outside them."
+    f" `{BEGIN_AFTER_MARKER}` and `{END_AFTER_MARKER}`. Put all"
+    " code inside the markers, and only code: no commentary,"
+    " narration, or explanation; put any explanation outside them."
 )
 
 # A fence line: up to three spaces of indent, ``` and the rest of the line
