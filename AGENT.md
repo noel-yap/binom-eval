@@ -21,6 +21,7 @@ pytest path/to/evals -m live_eval \
     --live-eval-target-rate 0.8 \
     --live-eval-min-trials 5 \
     --live-eval-max-trials 12 \
+    --live-eval-batch-max 3 \
     --live-eval-concurrency 8 \
     --live-eval-isolate \
     --live-eval-isolate-skill \
@@ -149,7 +150,7 @@ push to main
 - `p_good = P(θ ≥ TARGET_RATE | k, n)` via `_betainc` (Lentz continued fraction, stdlib only).
 - PASS once `p_good > PASS_THRESHOLD` (≈0.865), FAIL once `p_good < FAIL_THRESHOLD` (≈0.135);
   the PASS edge is overridable per run via `--live-eval-pass-threshold`.
-- Adaptive: `next_batch_size` computes the optimistic shortfall per undetermined check, floors at `BATCH_FLOOR=3`, caps at remaining budget.
+- Adaptive: `next_batch_size` (`batch_max`, from `--live-eval-batch-max`, default `BATCH_MAX`) computes the optimistic shortfall per undetermined check, takes the largest shortfall, capped at `batch_max` (3 by default, no floor) and the remaining budget.
 - No separate tiebreak: `eval_passed` grades on the same `pass_threshold` as
   the verdict band's PASS edge, so a check that exhausts `MAX_TRIALS` still
   inside the band grades FAIL.

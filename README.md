@@ -59,7 +59,8 @@ much of it clears a target rate.
   posterior is re-graded. Sampling stops as soon as every check locks PASS or
   any check locks FAIL — capping cost at `--live-eval-max-trials` (default 21)
   while usually spending far fewer. `--live-eval-min-trials` (default 0) can
-  force a minimum sample before early stopping is allowed.
+  force a minimum sample before early stopping is allowed, and
+  `--live-eval-batch-max` (default 3) caps how many trials fire per round.
 - **Concurrency:** the evals in a suite are driven in parallel, and each fans
   its trial batches out too. A single shared semaphore
   (`--live-eval-concurrency`, default 5) caps total in-flight backend calls (e.g. `claude -p`)
@@ -84,8 +85,8 @@ variance. Deterministic checks belong in an ordinary unit suite.
 
 ## Worked example
 
-Say a skill's target is the default `0.6` (three-of-five) and the opening
-batch is `BATCH_FLOOR = 3` trials. Here's how a few different outcomes grade,
+Say a skill's target is the default `0.6` (three-of-five); batches are sized to the trials
+needed to settle the verdict, capped at `BATCH_MAX = 3`. Here's how a few different outcomes grade,
 using the actual posterior math (`posterior_pass_prob`):
 
 | Outcomes so far | `k` (passes) | `n` (trials) | `p_good = P(θ ≥ 0.6 ⎮ k, n)` | Verdict |
@@ -95,9 +96,9 @@ using the actual posterior math (`posterior_pass_prob`):
 | ❌ ❌ | 0 | 2 | **0.064** | **FAIL** — drops below `FAIL_THRESHOLD` (0.1353); stop here |
 | ✅ × 6 | 6 | 6 | 0.972 | **PASS**, and even more confidently than the 3/3 row |
 
-The first row is why "good skills lock in ~2–3 rounds": three clean passes
-against a `0.6` target is already enough evidence, so a healthy skill often
-never runs past the opening batch. The third row shows the same on the FAIL
+The first row is why "good skills lock in a few rounds": three clean passes
+against a `0.6` target is already enough evidence, so a healthy skill settles in a
+handful of trials. The third row shows the same on the FAIL
 side — two clean misses locks the verdict just as fast, so a badly broken
 skill doesn't burn the full budget either. The second row is the case that
 keeps sampling: one miss in three trials leaves `p_good` near the middle, so
@@ -155,18 +156,16 @@ broken skill correctly failed.
   `e^-2` is a natural "two-units-of-evidence" tail. Raising the low edge (e.g.
   to 0.5, a FAIL-eager asymmetric band) was measured to ~10× the false-FAIL
   rate on good skills — rejected.
-- **`BATCH_FLOOR = 3`.** Not just a concurrency knob — it's a *stability* knob.
-  Flooring the opening salvo at 3 forces a representative sample before the
-  posterior may commit, which cut false-FAIL ~3× versus a floor of 1 (e.g.
-  12% → 4% at target 0.7, true 0.9) for ~2 extra trials. A floor of 2 was
-  strictly worse (same cost, less benefit, and it could *raise* round counts);
-  5 bought marginal speed at near-max trial cost. 3 is the sweet spot.
-- **`MAX_TRIALS = 21`.** A ceiling, not a target: good skills lock in ~2–3
+- **`BATCH_MAX = 3`.** A per-batch ceiling, not a floor. Each round runs the
+  trials needed to settle the slowest undetermined check, but never more than
+  3 (and never more than the remaining budget), so the posterior is re-graded
+  often and trials are not spent past the point a verdict could lock. When
+  the largest shortfall is 1 or 2, the batch is just that size.
+- **`MAX_TRIALS = 21`.** A ceiling, not a target: good skills lock in a few
   rounds (~6–9 trials) and never approach it (see the worked example above).
   It only bites for a skill sitting *exactly* at the bar, which is genuinely
   undecidable — one more trial can't rescue it. 21 = 3 × 7 divides evenly by
-  `BATCH_FLOOR`, so the worst case is a clean seven rounds of three with no
-  ragged final batch. The budget is the least sensitive parameter here (20 vs
+  `BATCH_MAX`, so full-size batches exhaust it with no ragged final batch. The budget is the least sensitive parameter here (20 vs
   21 was within noise).
 - **Prior `Beta(1, 1)` (uniform).** No prior opinion on a skill's pass rate —
   the verdict is driven by the trials, not by a thumb on the scale. Raise
@@ -185,7 +184,7 @@ overridable from the CLI: `--live-eval-target-rate`;
 keeping the band symmetric about 1/2; values must sit strictly between
 0.5 and 1.0 — and the same value gates the final grade, per above); and
 `--live-eval-min-trials` / `--live-eval-max-trials` (`min-trials` must not
-exceed `max-trials`). The batch floor (`BATCH_FLOOR`) and prior
+exceed `max-trials`). The batch ceiling (`BATCH_MAX`) and prior
 (`PRIOR_ALPHA`, `PRIOR_BETA`) are module constants, importable from
 `binom_eval` — change them there if the workload assumptions shift.
 
@@ -200,6 +199,7 @@ changes:
 | `--live-eval-pass-threshold` | `≈0.8647` (`1 − e⁻²`) | The verdict band's PASS edge; `p_good` must exceed this to lock PASS, and drop below its complement (`≈0.1353`) to lock FAIL — always symmetric about `0.5`. Must sit strictly between `0.5` and `1.0`. Also the bar `eval_passed` uses for the final grade. Raise it (e.g. `0.95`) to demand more confidence before locking either verdict, at the cost of more trials. |
 | `--live-eval-min-trials` | `0` | Floor beneath the adaptive driver's early stop: even once the verdict locks, at least this many trials still run. Must not exceed `--live-eval-max-trials`. |
 | `--live-eval-max-trials` | `21` | Budget ceiling: the most times any single eval runs before the verdict is forced. Good skills lock in far fewer trials (see [Worked example](#worked-example)); this only bites a skill sitting almost exactly at the target rate. |
+| `--live-eval-batch-max` | `3` | Per-batch ceiling: the most trials fired in one round while a verdict is open. Each round runs the trials needed to settle the slowest undetermined check, capped by this and the remaining budget. Must be `>= 1`. Raise it for more parallelism per round; lower it to re-grade more often. |
 | `--live-eval-concurrency` | `5` | Max backend calls (`claude -p` or otherwise) in flight at once, across the whole session — shared by every eval and every eval's own trial batches. Set to `1` to run fully serially. |
 | `--live-eval-isolate` | off | Runs each trial in a throwaway copy of the repo root instead of the shared tree. Needed for skills that **write** to the working tree, so concurrent trials can't clobber each other. |
 | `--live-eval-isolate-skill` | off | Implies `--live-eval-isolate`, but the throwaway copy keeps only the skill being evaluated (plus any named by `--live-eval-isolate-skill-path`): other skills (directories with a `SKILL.md`) in the skill containers are excluded, while shared non-skill entries there (a `README.md`, a `_shared/` directory) are kept. A symlinked container or skill directory must resolve inside the repo and is copied as a real directory; the in-repo target of a symlinked container (e.g. `shared/skills` behind `.claude/skills -> ../shared/skills`) is filtered too, so no sibling skill is visible at any location. The skill is found by name at `<repo_root>/.claude/skills/<skill>/` (or the `.cursor/skills/` / `skills/` equivalent); locations without a `SKILL.md` are ignored. Errors up front if no location holds a `SKILL.md`. |
@@ -223,7 +223,7 @@ uv add "binom-eval @ git+https://github.com/noel-yap/binom-eval"
 
 Installing registers a pytest plugin, so the `--live-eval-target-rate`,
 `--live-eval-pass-threshold`, `--live-eval-min-trials`, `--live-eval-max-trials`,
-`--live-eval-concurrency`, `--live-eval-isolate`, `--live-eval-isolate-skill`,
+`--live-eval-batch-max`, `--live-eval-concurrency`, `--live-eval-isolate`, `--live-eval-isolate-skill`,
 `--live-eval-isolate-skill-path`, `--live-eval-model`,
 `--live-eval-failure-max-chars`, `--live-eval-show-posterior`,
 `--live-eval-verbose`, `--live-eval-timeout`, and `--live-eval-progress`
@@ -358,7 +358,7 @@ consider_namespace_packages = true
 | `trial_outcomes_passed`, `trial_outcomes_failure_message`, `trial_outcomes_posterior_summary`, `trial_outcomes_verbose_message`, `graded_runs_verbose_message`, `failing_assertions`, `trigger_pass_counts` | Grading rollups and pytest-facing messages for a completed batch of runs. |
 | `assert_check`, `evaluate_check` | Helpers for writing assertion handlers — raise (or capture) a labeled `AssertionFailure`. |
 | `graded_runs` | The trials that count toward the posterior — errored trials (`EvalRun.errored`, e.g. an API failure that survived the runner's bounded retries) are excluded rather than graded as failures. |
-| `PASS_THRESHOLD`, `FAIL_THRESHOLD`, `PRIOR_ALPHA`, `PRIOR_BETA`, `BATCH_FLOOR` | The tunable constants behind the verdict band, the prior, and the opening-batch size — see [Why these defaults](#why-these-defaults). |
+| `PASS_THRESHOLD`, `FAIL_THRESHOLD`, `PRIOR_ALPHA`, `PRIOR_BETA`, `BATCH_MAX` | The tunable constants behind the verdict band, the prior, and the per-batch ceiling — see [Why these defaults](#why-these-defaults). |
 | `DEFAULT_TARGET_RATE`, `DEFAULT_MAX_TRIALS`, `DEFAULT_MIN_TRIALS`, `DEFAULT_CONCURRENCY`, `FAILURE_SECTION_MAX_CHARS` | The `--live-eval-*` CLI options' default values — see [Tuning knobs](#tuning-knobs). |
 | `run_eval_batch`, `stripped_env` | The backend-agnostic subprocess I/O layer. |
 | `ClaudeRunner`, `CursorRunner`, `resolve_runner`, `BACKENDS` | The per-backend `Runner` implementations, and the `backend:model` spec resolver used by `--live-eval-model`. |

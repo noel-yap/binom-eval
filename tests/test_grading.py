@@ -11,7 +11,7 @@ per skill.
 Expected numbers below pin the mechanics against a fixed representative
 `TARGET` of 2/3 (deliberately independent of the shipped default, so a
 default retune cannot break these unit tests), with the band (e^-2, 1 - e^-2),
-the prior Beta(1, 1), and `BATCH_FLOOR` of 3.
+the prior Beta(1, 1), and `BATCH_MAX` of 3.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import pytest
 
 import binom_eval
 from binom_eval import (
-    BATCH_FLOOR,
+    BATCH_MAX,
     FAILURE_SECTION_MAX_CHARS,
     FAIL_THRESHOLD,
     PASS_THRESHOLD,
@@ -222,18 +222,21 @@ class TestErroredRunExclusion:
     def test_errored_trials_do_not_fail_lock_the_verdict(self) -> None:
         # Three errored trials would previously read as three behavioral
         # failures and FAIL-lock the eval; now they carry no evidence, so
-        # the verdict is still open and the floor batch fires.
+        # the verdict is still open and the opening batch (1: a single
+        # behavioral failure could settle it) fires.
         runs = [_errored_run(), _errored_run(), _errored_run()]
-        assert next_batch_size(runs, [_skill_check], 21, TARGET) == BATCH_FLOOR
+        assert next_batch_size(runs, [_skill_check], 21, TARGET) == 1
 
     def test_errored_trials_do_not_count_as_passes(self) -> None:
         # 4/5 graded passes plus two errored trials must grade exactly like
-        # the 4/5 alone (shortfall 4), not like 6/7 passes.
+        # the 4/5 alone (shortfall 4, uncapped), not like 6/7 passes.
         runs = _runs(True, True, True, True, False) + [
             _errored_run(),
             _errored_run(),
         ]
-        assert next_batch_size(runs, [_skill_check], 21, TARGET) == 4
+        assert (
+            next_batch_size(runs, [_skill_check], 21, TARGET, batch_max=99) == 4
+        )
 
     def test_errored_trials_still_spend_the_budget(self) -> None:
         # 20 trials done (5 graded, 15 errored): one trial of budget remains.
@@ -823,14 +826,14 @@ class TestNextBatchSize:
     A run "passes" `_skill_check` when `skill_invoked` is True. The result is
     0 once the eval verdict is fixed (every check PASS-locked, or any check
     FAIL-locked, or the budget spent), else the optimistic batch -- the
-    largest per-undetermined-check shortfall, floored at `BATCH_FLOOR` and
-    capped by the remaining budget. Numbers assume target 2/3.
+    largest per-undetermined-check shortfall, capped at `batch_max` (default
+    `BATCH_MAX`, no floor) and by the remaining budget. Numbers assume target 2/3.
     """
 
-    def test_first_batch_is_the_floor(self) -> None:
-        # From scratch the optimistic shortfall (a single failure could FAIL)
-        # is below the floor, so the floor drives the opening salvo.
-        assert next_batch_size([], [_skill_check], 21, TARGET) == BATCH_FLOOR
+    def test_first_batch_is_the_shortfall_not_a_floor(self) -> None:
+        # From scratch a single failure could FAIL-lock, so the optimistic
+        # shortfall is 1 and no floor inflates it.
+        assert next_batch_size([], [_skill_check], 21, TARGET) == 1
 
     def test_zero_once_pass_locked(self) -> None:
         runs = _runs(*([True] * 6))  # p_good > PASS_THRESHOLD
@@ -847,10 +850,35 @@ class TestNextBatchSize:
     def test_no_checks_runs_nothing(self) -> None:
         assert next_batch_size(_runs(False, False), [], 21, TARGET) == 0
 
-    def test_uses_shortfall_when_it_exceeds_the_floor(self) -> None:
-        # 4 of 5 passes: undetermined, and the optimistic shortfall is 4 (> floor).
+    def test_caps_large_shortfall_at_batch_max(self) -> None:
+        # 4 of 5 passes: undetermined, optimistic shortfall is 4 (> cap of 3).
         runs = _runs(True, True, True, True, False)
-        assert next_batch_size(runs, [_skill_check], 21, TARGET) == 4
+        assert next_batch_size(runs, [_skill_check], 21, TARGET) == BATCH_MAX
+
+    def test_custom_batch_max_below_default(self) -> None:
+        assert next_batch_size([], [_skill_check], 21, TARGET, batch_max=1) == 1
+
+    def test_custom_batch_max_above_default_allows_full_shortfall(self) -> None:
+        runs = _runs(True, True, True, True, False)  # shortfall 4
+        assert (
+            next_batch_size(runs, [_skill_check], 21, TARGET, batch_max=5) == 4
+        )
+
+    def test_small_shortfall_is_not_floored(self) -> None:
+        # Find a state whose shortfall is < BATCH_MAX and check it is returned.
+        for passes in range(0, 20):
+            for fails in range(0, 20 - passes):
+                runs = _runs(*([True] * passes + [False] * fails))
+                if len(runs) >= 21 or not runs:
+                    continue
+                size = next_batch_size(runs, [_skill_check], 21, TARGET)
+                if 0 < size < BATCH_MAX and 21 - len(runs) > size:
+                    # Uncapped, it asks for exactly this many.
+                    assert next_batch_size(
+                        runs, [_skill_check], 21, TARGET, batch_max=99
+                    ) == size
+                    return
+        raise AssertionError("no state with a sub-cap shortfall found")
 
     def test_caps_batch_at_remaining_budget(self) -> None:
         # 20 runs done, still undetermined: only 1 trial of budget remains.
@@ -870,7 +898,12 @@ class TestNextBatchSize:
                 [True, True, True, True, False], ["x", "x", "x", "", ""]
             )
         ]
-        assert next_batch_size(runs, [_skill_check, check_text], 21, TARGET) == 4
+        assert (
+            next_batch_size(
+                runs, [_skill_check, check_text], 21, TARGET, batch_max=99
+            )
+            == 4
+        )
 
     def test_keeps_running_until_min_trials_even_when_pass_locked(self) -> None:
         runs = _runs(*([True] * 6))  # p_good > PASS_THRESHOLD
@@ -958,9 +991,9 @@ class TestRunEvalAdaptive:
             runner=binom_eval.ClaudeRunner(),
             batch_runner=fake_batch,
         )
-        # First batch is the floor (3); a clean streak then PASS-locks, so it
+        # First batch is the cap (3); a clean streak then PASS-locks, so it
         # stops well short of the 21-trial budget.
-        assert BATCH_FLOOR <= len(runs) < 21
+        assert BATCH_MAX <= len(runs) < 21
         assert all(run.skill_invoked for run in runs)
 
     def test_isolate_skill_forwarded_to_batch_runner_only_when_set(self) -> None:
@@ -1024,10 +1057,10 @@ class TestRunEvalAdaptive:
             runner=binom_eval.ClaudeRunner(),
             batch_runner=legacy_batch,
         )
-        assert len(runs) == BATCH_FLOOR
+        assert len(runs) == 1
 
     def test_stops_fast_when_failing(self) -> None:
-        # A skill that always misses: the opening floor of 3 FAIL-locks it.
+        # A skill that always misses: the 1-trial opening batch FAIL-locks it.
         def fake_batch(
             item: dict,
             repo_root: Path,
@@ -1054,7 +1087,7 @@ class TestRunEvalAdaptive:
             runner=binom_eval.ClaudeRunner(),
             batch_runner=fake_batch,
         )
-        assert len(runs) == BATCH_FLOOR
+        assert len(runs) == 1
 
     def test_runs_at_least_min_trials_before_stopping_on_pass(self) -> None:
         scripted = [True] * 21
