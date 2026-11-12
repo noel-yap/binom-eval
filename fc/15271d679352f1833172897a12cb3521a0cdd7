@@ -1,0 +1,37 @@
+src/binom_eval/grading.py
+  s_1cbb63f4ff8efd::t_74464a2d29e557 41-44
+src/binom_eval/__init__.py
+  s_1cbb63f4ff8efd::t_7476d707417fef 100,252
+  s_1cbb63f4ff8efd::t_74464a2d29e557 30-31,59,64,70-71,82,85-86,89,218,222-224,235,238-239,242
+src/binom_eval/plugin.py
+  s_1cbb63f4ff8efd::t_74464a2d29e557 14,28,105,115-117,149-150,172,176-177,185,188,230-233,235-237,462-478
+  s_1cbb63f4ff8efd::t_7476d707417fef 61-68,178,189-190,234,238-240
+  s_1cbb63f4ff8efd::t_1ece32d1456b76 241-242
+README.md
+  s_1cbb63f4ff8efd::t_aa5e9220861833 195-196,198-199
+  s_1cbb63f4ff8efd::t_3b31c97fcdbeae 187-188
+  s_1cbb63f4ff8efd::t_2d441961e69e32 60-63,87-133,157-158,215-223,240,242,255-257,412-413,420,451
+src/binom_eval/planning.py
+  s_1cbb63f4ff8efd::t_18c026f2f0f88b 1-232,234-238,243,253,264-269,283-284
+  s_1cbb63f4ff8efd::t_7476d707417fef 233,239-242,244-252,254-263,270-282
+AGENTS.md
+  s_1cbb63f4ff8efd::t_e6d3cca345148e 1,33,72-76,141
+CLAUDE.md
+  s_1cbb63f4ff8efd::t_a68d188472b87e 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fc15271d679352f1833172897a12cb3521a0cdd7",
+  "prompts": {},
+  "sessions": {
+    "s_1cbb63f4ff8efd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a3b4884-17a3-484f-9b7e-421895e18fd6",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Noel Yap <noel.yap+github.com@gmail.com>"
+    }
+  }
+}
