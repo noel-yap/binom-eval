@@ -57,9 +57,10 @@ much of it clears a target rate.
   trial budget runs out.
 - **Adaptive trials:** trials run in concurrent batches; after each batch the
   posterior is re-graded. Sampling stops as soon as every check locks PASS or
-  any check locks FAIL — capping cost at `--live-eval-max-trials` (default 21)
-  while usually spending far fewer. `--live-eval-min-trials` (default 0) can
-  force a minimum sample before early stopping is allowed, and
+  any check locks FAIL — capping cost at `--live-eval-max-trials` (derived
+  from `θ₀`, `τ` and `δ` — min 3 / max 69 by default; see [Variables](#variables))
+  while usually spending far fewer. `--live-eval-min-trials` (default: the
+  derived `N_min`) can force a minimum sample before early stopping is allowed, and
   `--live-eval-batch-max` (default 3) caps how many trials fire per round.
 - **Concurrency:** the evals in a suite are driven in parallel, and each fans
   its trial batches out too. A single shared semaphore
@@ -82,6 +83,53 @@ much of it clears a target rate.
 Evals are non-deterministic by design and are **never cached**: every trial is
 a fresh live backend call (e.g. `claude -p`), so the suite measures the model's run-to-run
 variance. Deterministic checks belong in an ordinary unit suite.
+
+## Variables
+
+| Symbol | Meaning (plain English) | Source |
+| --- | --- | --- |
+| `θ` | the skill's real, unobservable pass rate | model |
+| `k`, `n` | passes and trials observed so far | data |
+| `θ₀` | the bar, and the midpoint of the indifference zone | `--live-eval-target-rate` |
+| `τ` | confidence: how sure the data must make us before PASS; the FAIL edge is `1 − τ` | `--live-eval-pass-threshold` |
+| `δ` | tolerance: skills below `θ₀ − δ` should FAIL and skills above `θ₀ + δ` should PASS, each with confidence `τ`; inside `θ₀ ± δ` either verdict is acceptable | `--live-eval-delta` |
+| `p_good` | `P(θ ≥ θ₀ ⎮ k, n)`, the posterior mass at or above the bar | derived from the data |
+| `N_min`, `N_max` | the derived minimum and maximum number of trials | derived (below) |
+| `k_min(N)` | the fewest passes out of `N` trials that still PASS | derived, reporting |
+
+The verdict rule itself is unchanged: PASS iff `p_good > τ`. `δ` only decides
+how many trials that rule needs:
+
+- **`N_min = ⌈ln(1−τ) / ln θ₀⌉ − 1`** — the smallest `n` at which `n` of `n`
+  passes can clear `τ` (from `1 − θ₀^(n+1) > τ`). It depends on `θ₀` and `τ`
+  only, e.g. `(0.6, 0.865) → 3`, `(0.8, 0.90) → 10`.
+- **`N_max`** — the smallest `N` where, with `k_min(N)` the fewest passes that
+  PASS, both `P(Binomial(N, θ₀+δ) ≥ k_min) ≥ τ` (a good skill PASSes) and
+  `P(Binomial(N, θ₀−δ) ≥ k_min) ≤ 1−τ` (a bad skill rarely does). Rounded up
+  to a multiple of `--live-eval-batch-max`; an error if nothing up to 1000
+  qualifies. E.g. `(θ₀=0.6, δ=0.1, τ=0.865) → 107`, `(0.8, 0.1, 0.90) → 85`.
+- **Validation:** `δ > 0`, `θ₀ − δ > 0`, `θ₀ + δ < 1`, `τ` in `(0.5, 1)`.
+
+**Caveat — adaptive power.** The adaptive driver can lock FAIL early on an
+unlucky start, so the real chance a skill at `θ₀ + δ` PASSes within `N_max`
+is below the fixed-`N` figure `τ` the derivation targets: e.g.
+`(0.6, 0.1, 0.865)` drops from 0.87 to 0.80. `binom-eval` computes it exactly
+(`adaptive_power`) and prints `adaptive power at N_max` in the run summary
+rather than silently promising `τ`. Setting `--live-eval-min-trials` to
+`N_min` (the derived default) limits, but does not remove, this.
+
+**When you also give `--live-eval-min-trials` / `--live-eval-max-trials`**,
+the explicit flags are the budget authority and always win:
+
+| Specified | Behaviour |
+| --- | --- |
+| neither | derived `N_min` / `N_max` (`3` / `69` at the defaults) |
+| min only | used as-is; `N_max` derived. Below `N_min`: no effect, noted. Above the max: error |
+| max only | used as-is; min derived. Below `N_min`: **error** (PASS is impossible). Adaptive power at `θ₀ + δ` below `τ`: **warning** with the number |
+| both | error unless `N_min ≤ max` and `min ≤ max`; same underpowered warning |
+
+`δ` always applies (default `0.125`), so an explicit max is always checked against it. Derived and
+effective values are shown at the end of the run.
 
 ## Worked example
 
@@ -106,7 +154,8 @@ keeps sampling: one miss in three trials leaves `p_good` near the middle, so
 
 **What if the budget runs out and the eval is *still* inside the band?** That
 only happens for a skill sitting almost exactly on the target rate. At the
-default target and `--live-eval-max-trials 21`:
+default target and an explicit `--live-eval-max-trials 21` (below the
+derived default of 69, so this run would also warn that it is underpowered):
 
 | `k` (of 21) | `p_good` | In band? | Grade |
 | --- | --- | --- | --- |
@@ -135,17 +184,19 @@ working skills in CI** (a broken skill gets fixed fast, so it's rarely the
 thing under test). That makes the dominant failure mode a *false red* — a
 working skill that the build rejects by chance — so the parameters are chosen
 to keep that rare while still catching real regressions. The numbers below are
-from Monte-Carlo simulation of the adaptive loop (budget 21, prior
+from an exact enumeration of the adaptive loop (the real `next_batch_size` rule
+and `eval_passed` grade, default budget min 3 / max 69, `BATCH_MAX = 3`, prior
 `Beta(1, 1)`); "false-FAIL" is a good skill wrongly failed, "caught" is a
 broken skill correctly failed.
 
 - **`TARGET_RATE = 3/5`.** The bar must sit *below* where good skills actually
   live (~0.9+), because asking the posterior to distinguish 0.90 from a bar
   near it is both expensive and flaky. At 3/5 a true-0.90 skill false-fails
-  only ~0.2% of the time (true-0.80: ~3%), while clearly-broken skills are
-  still caught reliably (true-0.40 ~91%, true-0.30 ~100%). This deliberately
+  only ~0.4% of the time (true-0.80: ~4%), while clearly-broken skills are
+  still caught reliably (true-0.40 ~92%, true-0.30 ~97%). This deliberately
   favours **never red-flagging a working skill** over catching *mildly*-broken
-  ones: a true-0.60 skill is caught only ~46% (vs ~79% at a 2/3 bar), on the
+  ones: a true-0.60 skill is caught only ~55% (vs ~80% at a 2/3 bar, which
+  false-fails a true-0.90 skill ~3% and a true-0.80 skill ~15%), on the
   assumption that real regressions crater well below 0.6 and get fixed fast.
   Raise the bar toward 2/3 if catching mild breakage matters more than CI
   quiet. "Passes at least three of every five attempts" is an easy bar to
@@ -161,12 +212,15 @@ broken skill correctly failed.
   3 (and never more than the remaining budget), so the posterior is re-graded
   often and trials are not spent past the point a verdict could lock. When
   the largest shortfall is 1 or 2, the batch is just that size.
-- **`MAX_TRIALS = 21`.** A ceiling, not a target: good skills lock in a few
-  rounds (~6–9 trials) and never approach it (see the worked example above).
-  It only bites for a skill sitting *exactly* at the bar, which is genuinely
-  undecidable — one more trial can't rescue it. 21 = 3 × 7 divides evenly by
-  `BATCH_MAX`, so full-size batches exhaust it with no ragged final batch. The budget is the least sensitive parameter here (20 vs
-  21 was within noise).
+- **`δ = 0.125` (→ min 3, max 69).** The trial budget is derived, not fixed.
+  With `θ₀ = 0.6` and the default `τ`, `δ = 0.125` gives `N_min = 3` and
+  `N_max = 69` (a multiple of `BATCH_MAX`), with adaptive power ≈0.87 at the
+  max for a skill at `θ₀ + δ`. The max is a ceiling, not a target: good skills
+  lock in a few rounds (~6–9 trials) and never approach it (see the worked
+  example above); it only bites a skill sitting near the bar. A narrower `δ`
+  costs far more trials (`δ = 0.1` → 107) and a wider one is cheaper
+  (`δ = 0.2` → 22) but lets mildly-broken skills pass. The earlier fixed
+  budget of 21 is now just an explicit `--live-eval-max-trials 21` away.
 - **Prior `Beta(1, 1)` (uniform).** No prior opinion on a skill's pass rate —
   the verdict is driven by the trials, not by a thumb on the scale. Raise
   `PRIOR_ALPHA` for an optimistic prior ("skills usually work, demand less
@@ -183,8 +237,9 @@ overridable from the CLI: `--live-eval-target-rate`;
 `--live-eval-pass-threshold` (the FAIL edge follows as its complement,
 keeping the band symmetric about 1/2; values must sit strictly between
 0.5 and 1.0 — and the same value gates the final grade, per above); and
+`--live-eval-delta`, which derives the trial budget; and
 `--live-eval-min-trials` / `--live-eval-max-trials` (`min-trials` must not
-exceed `max-trials`). The batch ceiling (`BATCH_MAX`) and prior
+exceed `max-trials`; both override the derived values). The batch ceiling (`BATCH_MAX`) and prior
 (`PRIOR_ALPHA`, `PRIOR_BETA`) are module constants, importable from
 `binom_eval` — change them there if the workload assumptions shift.
 
@@ -197,8 +252,9 @@ changes:
 | --- | --- | --- |
 | `--live-eval-target-rate` | `0.6` (3/5) | The true pass rate `θ` a good skill should clear. Raise it (e.g. `0.8`) to demand a more reliable skill; lower it to tolerate a flakier one. See `TARGET_RATE` above. |
 | `--live-eval-pass-threshold` | `≈0.8647` (`1 − e⁻²`) | The verdict band's PASS edge; `p_good` must exceed this to lock PASS, and drop below its complement (`≈0.1353`) to lock FAIL — always symmetric about `0.5`. Must sit strictly between `0.5` and `1.0`. Also the bar `eval_passed` uses for the final grade. Raise it (e.g. `0.95`) to demand more confidence before locking either verdict, at the cost of more trials. |
-| `--live-eval-min-trials` | `0` | Floor beneath the adaptive driver's early stop: even once the verdict locks, at least this many trials still run. Must not exceed `--live-eval-max-trials`. |
-| `--live-eval-max-trials` | `21` | Budget ceiling: the most times any single eval runs before the verdict is forced. Good skills lock in far fewer trials (see [Worked example](#worked-example)); this only bites a skill sitting almost exactly at the target rate. |
+| `--live-eval-delta` | `0.125` | Tolerance `δ` of the indifference zone `θ₀ ± δ`. The default min/max trials are always derived from `θ₀`, `τ` and `δ` (see [Variables](#variables)). Needs `δ > 0`, `θ₀ − δ > 0`, `θ₀ + δ < 1`. |
+| `--live-eval-min-trials` | derived `N_min` (`3` at the defaults) | Floor beneath the adaptive driver's early stop: even once the verdict locks, at least this many trials still run. Always wins when given. Must not exceed `--live-eval-max-trials`. |
+| `--live-eval-max-trials` | derived `N_max` (`69` at the defaults) | Budget ceiling: the most times any single eval runs before the verdict is forced. Always wins when given; below `N_min` is an error and an underpowered value warns (see [Variables](#variables)). Good skills lock in far fewer trials (see [Worked example](#worked-example)); this only bites a skill sitting almost exactly at the target rate. |
 | `--live-eval-batch-max` | `3` | Per-batch ceiling: the most trials fired in one round while a verdict is open. Each round runs the trials needed to settle the slowest undetermined check, capped by this and the remaining budget. Must be `>= 1`. Raise it for more parallelism per round; lower it to re-grade more often. |
 | `--live-eval-concurrency` | `5` | Max backend calls (`claude -p` or otherwise) in flight at once, across the whole session — shared by every eval and every eval's own trial batches. Set to `1` to run fully serially. |
 | `--live-eval-isolate` | off | Runs each trial in a throwaway copy of the repo root instead of the shared tree. Needed for skills that **write** to the working tree, so concurrent trials can't clobber each other. |
@@ -353,13 +409,15 @@ consider_namespace_packages = true
 | `make_eval_runs_fixture` | Build the session-scoped `eval_runs` pytest fixture. |
 | `bind_eval_runs_fixture`, `register_live_eval_tests` | Thin suite wiring for `conftest.py` / `test_evals.py`. |
 | `run_eval_adaptive`, `next_batch_size` | The adaptive trial driver. |
+| `min_trials`, `max_trials`, `k_min`, `resolve_trial_bounds`, `TrialPlan` | Derive `N_min` / `N_max` from `θ₀`, `τ`, `δ` and resolve them against explicit flags (see [Variables](#variables)). |
+| `adaptive_power`, `adaptive_outcome_masses` | Exact probability the adaptive driver ends in PASS (and the PASS / FAIL / exhausted masses) for a given true rate and budget. |
 | `posterior_pass_prob`, `eval_passed` | The Beta-binomial posterior (`p_good = P(θ ≥ target ⎮ k, n)`) and the final grade (`p_good > pass_threshold`). |
 | `format_posterior_summary`, `max_target_at_pass_threshold` | Human-readable posterior summaries, and the highest target rate that would still lock PASS given the same `(k, n)` (see [Worked example](#worked-example)). |
 | `trial_outcomes_passed`, `trial_outcomes_failure_message`, `trial_outcomes_posterior_summary`, `trial_outcomes_verbose_message`, `graded_runs_verbose_message`, `failing_assertions`, `trigger_pass_counts` | Grading rollups and pytest-facing messages for a completed batch of runs. |
 | `assert_check`, `evaluate_check` | Helpers for writing assertion handlers — raise (or capture) a labeled `AssertionFailure`. |
 | `graded_runs` | The trials that count toward the posterior — errored trials (`EvalRun.errored`, e.g. an API failure that survived the runner's bounded retries) are excluded rather than graded as failures. |
 | `PASS_THRESHOLD`, `FAIL_THRESHOLD`, `PRIOR_ALPHA`, `PRIOR_BETA`, `BATCH_MAX` | The tunable constants behind the verdict band, the prior, and the per-batch ceiling — see [Why these defaults](#why-these-defaults). |
-| `DEFAULT_TARGET_RATE`, `DEFAULT_MAX_TRIALS`, `DEFAULT_MIN_TRIALS`, `DEFAULT_CONCURRENCY`, `FAILURE_SECTION_MAX_CHARS` | The `--live-eval-*` CLI options' default values — see [Tuning knobs](#tuning-knobs). |
+| `DEFAULT_TARGET_RATE`, `DEFAULT_DELTA`, `DEFAULT_CONCURRENCY`, `FAILURE_SECTION_MAX_CHARS` | The `--live-eval-*` CLI options' default values — see [Tuning knobs](#tuning-knobs). |
 | `run_eval_batch`, `stripped_env` | The backend-agnostic subprocess I/O layer. |
 | `ClaudeRunner`, `CursorRunner`, `resolve_runner`, `BACKENDS` | The per-backend `Runner` implementations, and the `backend:model` spec resolver used by `--live-eval-model`. |
 | `EvalRun`, `parse_stream_json` | Stream-json parsing into the shared record. |
@@ -390,4 +448,4 @@ Releases are automatic: every push to `main` cuts the next version from the
 Conventional Commits since the last tag and publishes the GitHub Release. The
 version is derived from the git tag (`hatch-vcs`) — no manifest to bump. To
 preview the next version without tagging, run `make release-dry`. See the
-**Releasing** section in [`AGENT.md`](AGENT.md) for the full flow.
+**Releasing** section in [`AGENTS.md`](AGENTS.md) for the full flow.

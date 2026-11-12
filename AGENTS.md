@@ -1,4 +1,4 @@
-# AGENT.md
+# AGENTS.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -30,6 +30,7 @@ pytest path/to/evals -m live_eval \
     --live-eval-model claude:claude-sonnet-4-6 \
     --live-eval-failure-max-chars 10000 \
     --live-eval-pass-threshold 0.95 \
+    --live-eval-delta 0.1 \
     --live-eval-show-posterior \
     --live-eval-verbose
 ```
@@ -67,6 +68,11 @@ older custom ones without that parameter keep working.
 
 `--live-eval-failure-max-chars` caps each failure section rendered in pytest
 output (default 2000; zero or negative disables truncation).
+
+`--live-eval-delta` (tolerance δ, indifference zone θ₀±δ; default
+`DEFAULT_DELTA = 0.125`) always derives the default `--live-eval-min-trials` /
+`--live-eval-max-trials` (θ₀=0.6 -> min 3, max 69); explicit flags always win.
+Both flags default to unset (`None`) so explicit use is detectable.
 
 `--live-eval-pass-threshold` overrides the verdict band's PASS edge
 (default `PASS_THRESHOLD`; must be strictly between 0.5 and 1.0 --
@@ -132,6 +138,7 @@ push to main
 | Module | Role |
 |---|---|
 | `posterior.py` | Beta-binomial math: `posterior_pass_prob`, `eval_passed`, `_verdict`/`Verdict`, `max_target_at_pass_threshold`, and the stdlib `_betainc` (Beta CDF) |
+| `planning.py` | Trial-budget derivation from θ₀, τ and δ (`--live-eval-delta`): `min_trials`, `k_min`, `max_trials`, exact `adaptive_power`, and `resolve_trial_bounds` (explicit min/max flags always win) |
 | `assertions.py` | Assertion protocol: `AssertionFailure`, `assert_check`, and single-trial `evaluate_check` |
 | `loading.py` | `evals.json` loading/expansion: `load_evals`, `expand_evals`, `assert_handler_coverage` |
 | `reporting.py` | Grading rollups + pytest rendering: `trial_outcomes`, `failing_assertions`, `format_posterior_summary`, and the verbose/failure messages |
