@@ -15,8 +15,7 @@ from typing import Any
 import pytest
 
 from binom_eval import (
-    DEFAULT_MAX_TRIALS,
-    DEFAULT_MIN_TRIALS,
+    DEFAULT_DELTA,
     DEFAULT_TARGET_RATE,
     DEFAULT_TIMEOUT_SECONDS,
     plugin,
@@ -65,15 +64,20 @@ class TestPytestAddOption:
         assert "--live-eval-show-posterior" in options
         assert "--live-eval-timeout" in options
 
-    def test_max_trials_defaults_to_constant_and_is_int(self) -> None:
+    def test_max_trials_is_unset_by_default_and_is_int(self) -> None:
         opt = self._options()["--live-eval-max-trials"]
-        assert opt["default"] == DEFAULT_MAX_TRIALS
+        assert opt["default"] is None
         assert opt["type"] is int
 
-    def test_min_trials_defaults_to_constant_and_is_int(self) -> None:
+    def test_min_trials_is_unset_by_default_and_is_int(self) -> None:
         opt = self._options()["--live-eval-min-trials"]
-        assert opt["default"] == DEFAULT_MIN_TRIALS
+        assert opt["default"] is None
         assert opt["type"] is int
+
+    def test_delta_defaults_to_constant_and_is_float(self) -> None:
+        opt = self._options()["--live-eval-delta"]
+        assert opt["default"] == DEFAULT_DELTA == 0.125
+        assert opt["type"] is float
 
     def test_batch_max_defaults_to_constant_and_is_int(self) -> None:
         opt = self._options()["--live-eval-batch-max"]
@@ -156,10 +160,11 @@ class TestDefaults:
     def test_target_rate_sits_inside_the_unit_interval(self) -> None:
         assert 0.0 < DEFAULT_TARGET_RATE < 1.0
 
-    def test_max_trials_is_a_whole_number_of_capped_batches(self) -> None:
-        # 21 = 3 * 7, so full-size BATCH_MAX rounds exhaust it with no
-        # ragged remainder.
-        assert DEFAULT_MAX_TRIALS % BATCH_MAX == 0
+    def test_delta_keeps_the_indifference_zone_inside_the_unit_interval(
+        self,
+    ) -> None:
+        assert 0.0 < DEFAULT_DELTA < DEFAULT_TARGET_RATE
+        assert DEFAULT_TARGET_RATE + DEFAULT_DELTA < 1.0
 
     def test_band_is_symmetric_about_one_half(self) -> None:
         assert abs((PASS_THRESHOLD + FAIL_THRESHOLD) - 1.0) < 1e-12
@@ -177,7 +182,7 @@ class _StubConfig:
 
     def __init__(
         self,
-        max_trials: int,
+        max_trials: int | None,
         target: float,
         concurrency: int = 4,
         isolate: bool = False,
@@ -185,12 +190,14 @@ class _StubConfig:
         isolate_skill_path: Sequence[str] | None = None,
         model: str | None = "claude:haiku",
         pass_threshold: float = PASS_THRESHOLD,
-        min_trials: int = DEFAULT_MIN_TRIALS,
+        min_trials: int | None = 0,
         batch_max: int = BATCH_MAX,
         progress: bool = False,
         timeout: int = DEFAULT_TRIAL_TIMEOUT,
+        delta: float = DEFAULT_DELTA,
     ) -> None:
         self._options = {
+            "--live-eval-delta": delta,
             "--live-eval-max-trials": max_trials,
             "--live-eval-min-trials": min_trials,
             "--live-eval-batch-max": batch_max,
@@ -232,6 +239,9 @@ class _FakeRunner:
         return self._model_error
 
 
+# Tests here pin small explicit budgets, which the always-on default δ rightly
+# flags as underpowered; that warning is covered by its own test below.
+@pytest.mark.filterwarnings("ignore:.*underpowered:UserWarning")
 class TestMakeEvalRunsFixture:
     """The session-scoped fixture the factory builds.
 
@@ -330,6 +340,92 @@ class TestMakeEvalRunsFixture:
             self._fixture_fn()(
                 _StubConfig(10, 2.0 / 3.0, min_trials=11)
             )
+
+    def _delta_fixture(
+        self, monkeypatch: pytest.MonkeyPatch, seen: list[tuple[int, int]]
+    ) -> Any:
+        monkeypatch.setattr(
+            plugin, "resolve_runner", lambda _spec: ("claude", "m", _FakeRunner())
+        )
+        monkeypatch.setattr(
+            plugin, "load_evals", lambda _p, _h: [{"id": "e1", "assertions": []}]
+        )
+
+        def fake_adaptive(
+            item: dict[str, Any], _r: Any, _s: str, max_trials: int, *a: Any,
+            min_trials: int = 0, **kw: Any,
+        ) -> list[EvalRun]:
+            seen.append((min_trials, max_trials))
+            return []
+
+        return self._fixture_fn(run_adaptive=fake_adaptive)
+
+    def test_delta_derives_min_and_max(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[tuple[int, int]] = []
+        self._delta_fixture(monkeypatch, seen)(
+            _StubConfig(None, 0.6, min_trials=None, delta=0.2)
+        )
+        assert seen == [(3, 24)]
+
+    def test_default_config_derives_min_3_max_69(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[tuple[int, int]] = []
+        self._delta_fixture(monkeypatch, seen)(
+            _StubConfig(None, DEFAULT_TARGET_RATE, min_trials=None)
+        )
+        assert seen == [(3, 69)]
+
+    def test_explicit_flags_win_over_derived(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[tuple[int, int]] = []
+        self._delta_fixture(monkeypatch, seen)(
+            _StubConfig(40, 0.6, min_trials=7, delta=0.2)
+        )
+        assert seen == [(7, 40)]
+
+    def test_max_below_derived_min_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with pytest.raises(pytest.fail.Exception, match="PASS is impossible"):
+            self._delta_fixture(monkeypatch, [])(
+                _StubConfig(2, 0.6, min_trials=None)
+            )
+
+    def test_invalid_delta_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        with pytest.raises(pytest.fail.Exception, match="delta must be > 0"):
+            self._delta_fixture(monkeypatch, [])(
+                _StubConfig(None, 0.6, min_trials=None, delta=-0.1)
+            )
+
+    def test_underpowered_max_warns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with pytest.warns(UserWarning, match="underpowered"):
+            self._delta_fixture(monkeypatch, [])(
+                _StubConfig(21, 0.6, min_trials=None, delta=0.1)
+            )
+
+    def test_plan_summary_is_handed_to_reporter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Reporter:
+            lines: list[str] = []
+
+            def set_plan_lines(self, lines: list[str]) -> None:
+                self.lines = lines
+
+            def set_model(self, _m: str) -> None:
+                pass
+
+        reporter = _Reporter()
+        config = _StubConfig(None, 0.6, min_trials=None, delta=0.2)
+        config.pluginmanager.get_plugin = lambda _n: reporter  # type: ignore[method-assign]
+        self._delta_fixture(monkeypatch, [])(config)
+        assert "derived N_max=24" in reporter.lines[0]
 
     def test_fails_when_batch_max_below_one(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1005,3 +1101,20 @@ class TestLiveEvalPassOutputEnabled:
     def test_show_posterior_enables_output(self) -> None:
         config = self._StubConfig(**{"--live-eval-show-posterior": True})
         assert plugin.live_eval_pass_output_enabled(config) is True
+
+
+class TestSessionReporterPlan:
+    def test_terminal_summary_prints_plan_lines(self) -> None:
+        reporter = plugin._SessionReporter(_StubConfig(21, 0.6))
+        reporter.set_plan_lines(["trials min=3 max=24", "a note"])
+        written: list[str] = []
+
+        class _Terminal:
+            def write_line(self, line: str) -> None:
+                written.append(line)
+
+            def write_sep(self, *_a: Any, **_k: Any) -> None:
+                pass
+
+        reporter.pytest_terminal_summary(_Terminal(), 0, None)
+        assert written == ["trials min=3 max=24", "a note"]

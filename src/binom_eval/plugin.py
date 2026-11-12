@@ -11,6 +11,7 @@ by the Beta-binomial verdict in `binom_eval.grading`.
 from __future__ import annotations
 
 import threading
+import warnings
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -24,6 +25,7 @@ from binom_eval.grading import (
     PASS_THRESHOLD,
     _eval_checks,
     load_evals,
+    resolve_trial_bounds,
     run_eval_adaptive,
 )
 from binom_eval.progress import make_renderer
@@ -33,16 +35,6 @@ from binom_eval.runner import (
     resolve_skill_dirs,
 )
 from binom_eval.stream_json import EvalRun
-
-# Budget ceiling: the most trials any single eval will ever run. A verdict
-# usually locks well before this; it only bites for skills sitting right at
-# the target rate, which are genuinely undecidable. 21 = 3 * 7 divides evenly
-# by BATCH_MAX, so a run of full-size batches exhausts it with no ragged one.
-DEFAULT_MAX_TRIALS = 21
-
-# Minimum trials per eval before the adaptive driver may stop early once the
-# posterior locks. Zero means no floor beyond the driver's own batches.
-DEFAULT_MIN_TRIALS = 0
 
 # How many `claude -p` runs may be in flight at once across the whole session.
 # Evals are driven in parallel and each fans its trials out too, so this single
@@ -65,6 +57,14 @@ DEFAULT_TRIAL_TIMEOUT = DEFAULT_TIMEOUT_SECONDS
 # θ ≥ 0.9 -> ~0.2%) while still catching clearly-broken skills; it favours
 # not red-flagging working skills over catching mildly-broken (~0.6) ones.
 DEFAULT_TARGET_RATE = 3.0 / 5.0
+
+# Tolerance δ of the indifference zone θ₀ ± δ: skills below θ₀-δ should FAIL
+# and skills above θ₀+δ should PASS, each with confidence τ. It sets the
+# default trial budget, derived from θ₀, τ and δ. With θ₀=0.6 and the default
+# τ, δ=0.125 gives min 3 / max 69 trials (batch_max 3) and an adaptive power
+# of about 0.87 at the max. Narrower δ costs far more trials (δ=0.1 -> 107);
+# wider is cheaper (δ=0.2 -> 22) but lets mildly-broken skills pass.
+DEFAULT_DELTA = 0.125
 
 LIVE_EVAL_POSTERIOR_PROPERTY = "live_eval_posterior"
 
@@ -102,6 +102,7 @@ class _SessionReporter:
         self._backend: str = ""
         self._version: str = ""
         self._model: str = ""
+        self._plan_lines: list[str] = []
         self._verbose = verbose
 
     def set_backend(self, backend: str, version: str) -> None:
@@ -110,6 +111,9 @@ class _SessionReporter:
 
     def set_model(self, model: str) -> None:
         self._model = model
+
+    def set_plan_lines(self, lines: list[str]) -> None:
+        self._plan_lines = lines
 
     def pytest_report_header(self) -> list[str]:
         if self._version:
@@ -142,6 +146,8 @@ class _SessionReporter:
     def pytest_terminal_summary(
         self, terminalreporter: Any, exitstatus: Any, config: Any
     ) -> None:
+        for line in self._plan_lines:
+            terminalreporter.write_line(line)
         parts: list[str] = []
         if self._version:
             parts.append(f"CLI {self._version}")
@@ -163,23 +169,25 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--live-eval-max-trials",
         action="store",
         type=int,
-        default=DEFAULT_MAX_TRIALS,
+        default=None,
         help=(
             "Budget ceiling: the most times any eval is run before the "
             "verdict is forced. Trials usually stop sooner once the "
-            f"posterior locks. Default {DEFAULT_MAX_TRIALS}."
+            "posterior locks. Always wins when given. Default: derived "
+            "from --live-eval-target-rate, --live-eval-pass-threshold and "
+            "--live-eval-delta."
         ),
     )
     parser.addoption(
         "--live-eval-min-trials",
         action="store",
         type=int,
-        default=DEFAULT_MIN_TRIALS,
+        default=None,
         help=(
             "Minimum trials per eval before the adaptive driver may stop "
-            "early once the posterior locks. Default "
-            f"{DEFAULT_MIN_TRIALS} (no minimum beyond the driver's own batches). "
-            "Must not exceed --live-eval-max-trials."
+            "early once the posterior locks. Always wins when given. "
+            "Default: the derived N_min. Must not exceed "
+            "--live-eval-max-trials."
         ),
     )
     parser.addoption(
@@ -217,6 +225,19 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "FAIL once p_good drops below its complement (1 minus this). "
             f"Default {PASS_THRESHOLD:.4f} (1 - e^-2); the low edge follows "
             "automatically so the band stays symmetric about 1/2."
+        ),
+    )
+    parser.addoption(
+        "--live-eval-delta",
+        action="store",
+        type=float,
+        default=DEFAULT_DELTA,
+        help=(
+            "Tolerance δ of the indifference zone θ₀±δ: skills below "
+            "θ₀-δ should FAIL and skills above θ₀+δ should PASS, each with "
+            "confidence τ. The default min/max trials are derived from "
+            "θ₀, τ and δ. Needs 0 < δ, θ₀-δ > 0, θ₀+δ < 1. "
+            f"Default {DEFAULT_DELTA}."
         ),
     )
     parser.addoption(
@@ -424,14 +445,6 @@ def make_eval_runs_fixture(
         preflight_error = runner.preflight()
         if preflight_error is not None:
             pytest.fail(preflight_error, pytrace=False)
-        max_trials = pytestconfig.getoption("--live-eval-max-trials")
-        min_trials = pytestconfig.getoption("--live-eval-min-trials")
-        if min_trials > max_trials:
-            pytest.fail(
-                f"--live-eval-min-trials ({min_trials}) must not exceed "
-                f"--live-eval-max-trials ({max_trials})",
-                pytrace=False,
-            )
         batch_max = pytestconfig.getoption("--live-eval-batch-max")
         if batch_max < 1:
             pytest.fail(
@@ -446,6 +459,23 @@ def make_eval_runs_fixture(
                 f"and 1.0, got {pass_threshold}",
                 pytrace=False,
             )
+        try:
+            plan = resolve_trial_bounds(
+                target,
+                pass_threshold,
+                batch_max,
+                delta=pytestconfig.getoption("--live-eval-delta"),
+                min_explicit=pytestconfig.getoption("--live-eval-min-trials"),
+                max_explicit=pytestconfig.getoption("--live-eval-max-trials"),
+            )
+        except ValueError as exc:
+            pytest.fail(str(exc), pytrace=False)
+        max_trials, min_trials = plan.max_trials, plan.min_trials
+        for message in plan.warnings:
+            warnings.warn(message, stacklevel=1)
+        reporter = pytestconfig.pluginmanager.get_plugin("binom_eval_reporter")
+        if reporter is not None:
+            reporter.set_plan_lines([plan.summary(), *plan.notes])
         concurrency = pytestconfig.getoption("--live-eval-concurrency")
         isolate_skill = None
         skill_paths = pytestconfig.getoption("--live-eval-isolate-skill-path") or []
@@ -514,9 +544,6 @@ def make_eval_runs_fixture(
             "",
         )
         if actual_model:
-            reporter = pytestconfig.pluginmanager.get_plugin(
-                "binom_eval_reporter"
-            )
             if reporter is not None:
                 reporter.set_model(actual_model)
 

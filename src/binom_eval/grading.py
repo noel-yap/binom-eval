@@ -38,6 +38,10 @@ from binom_eval.posterior import (
     _betainc, _verdict, eval_passed, max_target_at_pass_threshold,
     posterior_pass_prob,
 )
+from binom_eval.planning import (
+    MAX_TRIALS_CAP, TrialPlan, adaptive_outcome_masses, adaptive_power, k_min,
+    max_trials, min_trials, resolve_trial_bounds, validate_planning_inputs,
+)
 from binom_eval.assertions import (
     AssertionFailure, TrialFailure, _assertion_sections, _capture_trial_failure,
     _default_pass_sections, assert_check, evaluate_check,
