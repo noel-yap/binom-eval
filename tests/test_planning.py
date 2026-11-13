@@ -13,6 +13,7 @@ from binom_eval import (
     PASS_THRESHOLD,
     adaptive_outcome_masses,
     adaptive_power,
+    implied_delta,
     k_min,
     max_trials,
     min_trials,
@@ -199,6 +200,33 @@ class TestMaxTrials:
             validate_planning_inputs(target, tau, delta)
         with pytest.raises(ValueError, match=match):
             max_trials(target, delta, tau)
+
+
+class TestImpliedDelta:
+    def test_63_trials_at_default_target(self):
+        assert implied_delta(63, 0.6, TAU) == pytest.approx(0.1360, abs=1e-3)
+
+    def test_none_when_too_few_trials_to_pass(self):
+        assert implied_delta(min_trials(0.6, TAU) - 1, 0.6, TAU) is None
+
+    def test_none_when_no_delta_inside_unit_interval_resolves(self):
+        assert implied_delta(3, 0.99, TAU) is None
+
+    def test_is_boundary_of_both_indifference_conditions(self):
+        k = k_min(63, 0.6, TAU)
+
+        def resolves(delta: float) -> bool:
+            return (
+                _binom_sf(k, 63, 0.6 + delta) >= TAU
+                and _binom_sf(k, 63, 0.6 - delta) <= 1.0 - TAU
+            )
+
+        delta = implied_delta(63, 0.6, TAU)
+        assert resolves(delta + 1e-9)
+        assert not resolves(delta - 1e-6)
+
+    def test_shrinks_as_trials_grow(self):
+        assert implied_delta(69, 0.6, TAU) < implied_delta(20, 0.6, TAU)
 
 
 class TestAdaptivePower:
