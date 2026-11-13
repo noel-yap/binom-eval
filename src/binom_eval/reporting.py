@@ -151,16 +151,47 @@ def weakest_k_n(counts: list[tuple[int, int]]) -> tuple[int, int]:
     return weakest
 
 
+def _errored_note(runs: list[tuple[int, int]]) -> str:
+    """Bucket annotation for evals that had errored trials.
+
+    ``runs`` holds ``(total_runs, errored)`` per such eval.
+    """
+    if not runs:
+        return ""
+    if len(runs) == 1:
+        total, errored = runs[0]
+        return (
+            f"  (1 eval with errored trials: {total} run, {errored} errored)"
+        )
+    return (
+        f"  ({len(runs)} evals with errored trials: "
+        f"{sum(e for _, e in runs)} errored total)"
+    )
+
+
 def format_trials_histogram(
-    trials: list[int], *, width: int = 30, max_rows: int = 12
+    trials: list[int],
+    *,
+    errored: list[int] | None = None,
+    total_runs: list[int] | None = None,
+    width: int = 30,
+    max_rows: int = 12,
 ) -> list[str]:
-    """Bar chart of how many evals ran each number of trials.
+    """Bar chart of how many evals ran each number of graded trials.
 
     One row per distinct ``n``; when more than ``max_rows`` distinct values
-    occur, ``n`` is grouped into ``max_rows`` equal-width ranges.
+    occur, ``n`` is grouped into ``max_rows`` equal-width ranges. ``errored``
+    and ``total_runs`` are optional lists parallel to ``trials``; rows holding
+    evals with errored trials are annotated and the footer totals them.
     """
     if not trials:
         return []
+    errs = errored if errored is not None else [0] * len(trials)
+    totals = (
+        total_runs
+        if total_runs is not None
+        else [t + e for t, e in zip(trials, errs)]
+    )
     distinct = sorted(set(trials))
     if len(distinct) <= max_rows:
         buckets = [(n, n) for n in distinct]
@@ -177,14 +208,24 @@ def format_trials_histogram(
     label_w = max(len(label) for label in labels)
     ordered = sorted(trials)
     median = ordered[len(ordered) // 2]
-    lines = ["trials per eval (distribution across evals):"]
-    for label, count in zip(labels, counts):
+    lines = ["trials per eval (graded trials; errored trials excluded):"]
+    for (a, b), label, count in zip(buckets, labels, counts):
         bar = "█" * max(1 if count else 0, round(width * count / peak))
-        lines.append(f"  n={label:>{label_w}}  {bar} {count}")
-    lines.append(
-        f"  evals: {len(trials)};  trials min {ordered[0]}, "
+        note = _errored_note(
+            [
+                (tot, e)
+                for t, tot, e in zip(trials, totals, errs)
+                if a <= t <= b and e > 0
+            ]
+        )
+        lines.append(f"  n={label:>{label_w}}  {bar} {count}{note}")
+    footer = (
+        f"  evals: {len(trials)};  graded trials min {ordered[0]}, "
         f"median {median}, max {ordered[-1]}, total {sum(trials)}"
     )
+    if sum(errs) > 0:
+        footer += f";  errored {sum(errs)}"
+    lines.append(footer)
     return lines
 
 
@@ -203,11 +244,14 @@ def format_k_n_bar(
     target: float,
     pass_threshold: float = PASS_THRESHOLD,
     *,
+    errored: int = 0,
+    total_runs: int | None = None,
     width: int = 30,
 ) -> str:
     """One bar row: ``k/n`` out of ``[0, 1]`` with ``|`` marking ``θ₀``, the
     PASS/FAIL grade at ``τ`` and the ``δ`` that ``trials`` resolve
-    (``implied_delta``).
+    (``implied_delta``). When ``errored`` > 0 the row ends with
+    ``[E errored of T run]`` (``total_runs`` defaults to ``trials + errored``).
     """
     frac = passes / trials if trials else 0.0
     filled = round(width * frac)
@@ -217,10 +261,14 @@ def format_k_n_bar(
     ok = eval_passed(passes, trials, target, pass_threshold=pass_threshold)
     delta = implied_delta(trials, target, pass_threshold)
     delta_text = "n/a" if delta is None else f"{delta:.3f}"
-    return (
+    row = (
         f"  {label}  {''.join(cells)}  {passes:>3}/{trials:<3} {frac:.3f}  "
         f"{'PASS' if ok else 'FAIL'}  δ={delta_text}"
     )
+    if errored > 0:
+        total = trials + errored if total_runs is None else total_runs
+        row += f"  [{errored} errored of {total} run]"
+    return row
 
 
 def format_k_n_summary(
@@ -238,11 +286,9 @@ def format_k_n_summary(
         for _, k, n in results
     )
     total_k = sum(k for _, k, _ in results)
-    total_n = sum(n for _, _, n in results)
     summary = (
         f"  evals: {passed}/{len(results)} PASS;  "
-        f"pooled k/n = {total_k}/{total_n} "
-        f"({total_k / total_n if total_n else 0.0:.3f});  "
+        f"graded trials passed {total_k} of {sum(n for _, _, n in results)};  "
         f"θ₀ = {target:.3f};  τ = {pass_threshold:.4f}"
     )
     if planned_delta is not None:

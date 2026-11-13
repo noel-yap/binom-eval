@@ -1333,6 +1333,20 @@ class TestKNBar:
         assert "δ=n/a" in format_k_n_bar("x", 1, 1, 0.2, PASS_THRESHOLD)
 
 
+    def test_errored_note_when_bar_has_errors_only(self):
+        from binom_eval.grading import PASS_THRESHOLD, format_k_n_bar
+
+        clean = format_k_n_bar("e", 8, 9, 0.6, PASS_THRESHOLD)
+        assert "errored" not in clean
+        row = format_k_n_bar(
+            "e", 8, 9, 0.6, PASS_THRESHOLD, errored=3, total_runs=12
+        )
+        assert row == clean + "  [3 errored of 12 run]"
+        assert format_k_n_bar(
+            "e", 8, 9, 0.6, PASS_THRESHOLD, errored=3
+        ).endswith("[3 errored of 12 run]")
+
+
 class TestKNSummary:
     def test_empty(self):
         from binom_eval.grading import format_k_n_summary
@@ -1351,7 +1365,8 @@ class TestKNSummary:
             )
         )
         assert "evals: 1/2 PASS" in text
-        assert "pooled k/n = 63/126 (0.500)" in text
+        assert "pooled" not in text
+        assert "graded trials passed 63 of 126" in text
         assert "θ₀ = 0.600" in text and "planned δ = 0.125" in text
         assert "implied δ: min 0.136, mean 0.136, max 0.136" in text
 
@@ -1386,7 +1401,35 @@ class TestFormatTrialsHistogram:
         lines = format_trials_histogram([3, 3, 3, 63], width=6)
         assert lines[1] == "  n= 3  ██████ 3"
         assert lines[2] == "  n=63  ██ 1"
-        assert "evals: 4;  trials min 3, median 3, max 63, total 72" in lines[3]
+        assert lines[0] == (
+            "trials per eval (graded trials; errored trials excluded):"
+        )
+        assert lines[3] == (
+            "  evals: 4;  graded trials min 3, median 3, max 63, total 72"
+        )
+
+    def test_single_errored_eval_annotates_its_row_and_footer(self):
+        from binom_eval.grading import format_trials_histogram
+
+        lines = format_trials_histogram(
+            [3, 9], errored=[0, 3], total_runs=[3, 12], width=6
+        )
+        assert lines[1] == "  n=3  ██████ 1"
+        assert lines[2].endswith(
+            " 1  (1 eval with errored trials: 12 run, 3 errored)"
+        )
+        assert lines[3].endswith("total 12;  errored 3")
+
+    def test_several_errored_evals_in_bucket_are_summed(self):
+        from binom_eval.grading import format_trials_histogram
+
+        lines = format_trials_histogram(
+            [9, 9, 9], errored=[3, 2, 0], total_runs=[12, 11, 9]
+        )
+        assert lines[1].endswith(
+            " 3  (2 evals with errored trials: 5 errored total)"
+        )
+        assert lines[2].endswith(";  errored 5")
 
     def test_groups_into_ranges_when_many_distinct_values(self):
         from binom_eval.grading import format_trials_histogram

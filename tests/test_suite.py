@@ -462,7 +462,7 @@ def test_expectation_test_always_records_weakest_k_n_result(
     assert request.node.user_properties == [
         (
             LIVE_EVAL_RESULT_PROPERTY,
-            ("positive", 6, 6, 2.0 / 3.0, PASS_THRESHOLD),
+            ("positive", 6, 6, 2.0 / 3.0, PASS_THRESHOLD, 0, 6),
         )
     ]
 
@@ -491,7 +491,7 @@ def test_expectation_test_records_result_even_when_failing(
     assert request.node.user_properties == [
         (
             LIVE_EVAL_RESULT_PROPERTY,
-            ("positive", 0, 6, 2.0 / 3.0, PASS_THRESHOLD),
+            ("positive", 0, 6, 2.0 / 3.0, PASS_THRESHOLD, 0, 6),
         )
     ]
 
