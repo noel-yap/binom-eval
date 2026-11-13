@@ -318,6 +318,7 @@ class TestTrialOutcomesGrading:
             posterior_pass_prob(3, 3, TARGET), abs=1e-3
         )
         assert "max θ₀ (pass@τ=" in summary
+        assert "implied δ (n=" in summary
 
     def test_posterior_summary_counts_only_clean_trials(self) -> None:
         outcomes = [
