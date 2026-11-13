@@ -1,0 +1,40 @@
+.github/workflows/ci.yml
+  s_e23680cbe00810::t_d164e43c84507d 42,45-53,55-59,61-84
+  s_e23680cbe00810::t_6c09fdc00b7be8 41,43-44,54,60
+pyproject.toml
+  s_e23680cbe00810::t_4af96d27bd72f2 40
+.gitignore
+  s_e23680cbe00810::t_2345e162b93d99 23-24
+  s_e23680cbe00810::t_d164e43c84507d 28
+  s_e23680cbe00810::t_07818c803acb5a 25-26
+  s_e23680cbe00810::t_d187353a15fea7 27
+Makefile
+  s_e23680cbe00810::t_07818c803acb5a 30,34
+  s_e23680cbe00810::t_d164e43c84507d 7-8,45-56
+  s_e23680cbe00810::t_4af96d27bd72f2 31-33
+  s_e23680cbe00810::t_dbd2ea73490439 12,35-44,57,68
+AGENT.md
+  s_e23680cbe00810::t_7c9d19dd182fe3 11-12
+tests/test_coverage_compare.py
+  s_e23680cbe00810::t_999ed743387a39 1-106
+scripts/coverage_compare.py
+  s_e23680cbe00810::t_d19fc73dd63579 1-37
+uv.lock
+  s_e23680cbe00810::t_225a8b4ae2f6be 14,22-25,36-149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "24320ef5bf15439ca2229bcdb12837274e025ecc",
+  "prompts": {},
+  "sessions": {
+    "s_e23680cbe00810": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b182e9e-9cc7-4178-9cdc-12abd3ad3ea0",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Noel Yap <noel.yap+github.com@gmail.com>"
+    }
+  }
+}
