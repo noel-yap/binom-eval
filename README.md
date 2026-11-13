@@ -182,8 +182,11 @@ prints a k/n bar as it finishes (using its weakest assertion, which decides
 the eval's grade): `k/n` out of 1 with `θ₀` marked, the PASS/FAIL grade at τ,
 and the implied `δ` — the smallest tolerance the number of trials graded can
 resolve (the inverse of `max_trials`; `θ₀=0.6`, default τ, `n=63` gives
-`≈0.136`). The end of the run adds a footer (evals passing, pooled k/n, θ₀, τ,
-planned and implied δ) and a bar chart of the trials-per-eval distribution.
+`≈0.136`). The end of the run adds a footer (evals passing, raw graded-trial pass count, θ₀, τ,
+planned and implied δ) and a bar chart of the graded-trials-per-eval
+distribution. Errored trials are excluded from `n`; an eval with any shows
+`[E errored of T run]` on its bar, and the chart notes them per row and in
+its footer.
 
 ## Why these defaults
 

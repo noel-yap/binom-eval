@@ -1162,8 +1162,43 @@ class TestKNChartAggregation:
         node.user_properties = []
         plugin.record_live_eval_result(node, "e1", 4, 5, 0.6, 0.9)
         assert node.user_properties == [
-            (plugin.LIVE_EVAL_RESULT_PROPERTY, ("e1", 4, 5, 0.6, 0.9))
+            (
+                plugin.LIVE_EVAL_RESULT_PROPERTY,
+                ("e1", 4, 5, 0.6, 0.9, 0, None),
+            )
         ]
+
+    def test_record_live_eval_result_carries_errored_and_total_runs(
+        self,
+    ) -> None:
+        class _Node:
+            user_properties: list[Any] = []
+
+        node = _Node()
+        node.user_properties = []
+        plugin.record_live_eval_result(
+            node, "e1", 4, 5, 0.6, 0.9, errored=3, total_runs=8
+        )
+        assert node.user_properties[0][1][5:] == (3, 8)
+
+    def test_errored_counts_reach_bar_and_histogram(self) -> None:
+        terminal = self._Terminal()
+        reporter = plugin._SessionReporter(_ChartConfig(terminal, enabled=True))
+        report = _StubReport(
+            [
+                (
+                    plugin.LIVE_EVAL_RESULT_PROPERTY,
+                    ("e1", 8, 9, 0.6, PASS_THRESHOLD, 3, 12),
+                )
+            ],
+            passed=True,
+        )
+        reporter.pytest_runtest_logreport(report)
+        reporter.pytest_terminal_summary(terminal, 0, reporter._config)
+        text = "\n".join(terminal.lines)
+        assert "[3 errored of 12 run]" in text
+        assert "(1 eval with errored trials: 12 run, 3 errored)" in text
+        assert ";  errored 3" in text
 
     def test_each_eval_bar_prints_as_it_finishes(self) -> None:
         terminal = self._Terminal()

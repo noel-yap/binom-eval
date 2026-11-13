@@ -275,6 +275,8 @@ def register_live_eval_tests(
             weakest_trials,
             live_eval_target_rate,
             live_eval_pass_threshold,
+            errored=sum(1 for run in eval_runs[eval_id] if run.errored),
+            total_runs=len(eval_runs[eval_id]),
         )
         if not failing and (live_eval_verbose or live_eval_show_posterior):
             for assertion in ev["assertions"]:

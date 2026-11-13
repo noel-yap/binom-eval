@@ -95,14 +95,25 @@ def record_live_eval_result(
     trials: int,
     target: float,
     pass_threshold: float,
+    errored: int = 0,
+    total_runs: int | None = None,
 ) -> None:
     """Attach a check's ``(k, n)`` result to a test node for the aggregate
-    k/n chart in the terminal summary.
+    k/n chart in the terminal summary. ``errored`` counts errored runs and
+    ``total_runs`` all runs (``None``: same as ``trials``).
     """
     node.user_properties.append(
         (
             LIVE_EVAL_RESULT_PROPERTY,
-            (label, passes, trials, target, pass_threshold),
+            (
+                label,
+                passes,
+                trials,
+                target,
+                pass_threshold,
+                errored,
+                total_runs,
+            ),
         )
     )
 
@@ -129,6 +140,8 @@ class _SessionReporter:
         self._plan_lines: list[str] = []
         self._verbose = verbose
         self._results: list[tuple[str, int, int]] = []
+        self._errored: list[int] = []
+        self._total_runs: list[int] = []
         self._target: float | None = None
         self._pass_threshold: float | None = None
 
@@ -154,11 +167,17 @@ class _SessionReporter:
         trials: int,
         target: float,
         pass_threshold: float,
+        errored: int = 0,
+        total_runs: int | None = None,
     ) -> None:
         """Remember an eval's ``(k, n)`` and, when pass output is enabled,
         print its bar right away so results stream as evals finish.
         """
         self._results.append((label, passes, trials))
+        self._errored.append(errored)
+        self._total_runs.append(
+            trials if total_runs is None else total_runs
+        )
         self._target = target
         self._pass_threshold = pass_threshold
         if not live_eval_pass_output_enabled(self._config):
@@ -172,7 +191,15 @@ class _SessionReporter:
         if len(self._results) == 1:
             terminalreporter.write_line(format_k_n_header(target, pass_threshold))
         terminalreporter.write_line(
-            format_k_n_bar(label, passes, trials, target, pass_threshold)
+            format_k_n_bar(
+                label,
+                passes,
+                trials,
+                target,
+                pass_threshold,
+                errored=errored,
+                total_runs=total_runs,
+            )
         )
 
     def pytest_runtest_logreport(self, report: Any) -> None:
@@ -223,7 +250,9 @@ class _SessionReporter:
                 terminalreporter.write_line(line)
             terminalreporter.write_line("")
             for line in format_trials_histogram(
-                [n for _, _, n in self._results]
+                [n for _, _, n in self._results],
+                errored=self._errored,
+                total_runs=self._total_runs,
             ):
                 terminalreporter.write_line(line)
         parts: list[str] = []
