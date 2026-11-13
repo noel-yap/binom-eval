@@ -129,15 +129,136 @@ def format_posterior_summary(
     """
     p_good = posterior_pass_prob(passes, trials, target)
     max_target = max_target_at_pass_threshold(passes, trials, pass_threshold)
-    delta = implied_delta(trials, target, pass_threshold)
-    delta_text = "n/a" if delta is None else f"{delta:.3f}"
     return (
         f"{label}: {passes}/{trials} trials passed; "
         f"P(θ ≥ {target:.3f} | k={passes}, n={trials}) = {p_good:.3f}; "
         f"max θ₀ (pass@τ={pass_threshold:.3f} | k={passes}, n={trials}) = "
-        f"{max_target:.3f}; "
-        f"implied δ (n={trials}) = {delta_text}"
+        f"{max_target:.3f}"
     )
+
+
+def weakest_k_n(counts: list[tuple[int, int]]) -> tuple[int, int]:
+    """``(k, n)`` of the assertion with the lowest ``k/n``.
+
+    An eval passes only when every assertion does, and ``p_good`` rises with
+    ``k``, so the weakest assertion decides the eval's grade and its
+    ``(k, n)`` stands for the whole eval.
+    """
+    weakest = counts[0]
+    for k, n in counts[1:]:
+        if k * weakest[1] < weakest[0] * n:
+            weakest = (k, n)
+    return weakest
+
+
+def format_trials_histogram(
+    trials: list[int], *, width: int = 30, max_rows: int = 12
+) -> list[str]:
+    """Bar chart of how many evals ran each number of trials.
+
+    One row per distinct ``n``; when more than ``max_rows`` distinct values
+    occur, ``n`` is grouped into ``max_rows`` equal-width ranges.
+    """
+    if not trials:
+        return []
+    distinct = sorted(set(trials))
+    if len(distinct) <= max_rows:
+        buckets = [(n, n) for n in distinct]
+    else:
+        lo, hi = distinct[0], distinct[-1]
+        step = -(-(hi - lo + 1) // max_rows)
+        buckets = [
+            (lo + i * step, min(hi, lo + (i + 1) * step - 1))
+            for i in range(max_rows)
+        ]
+    counts = [sum(1 for t in trials if a <= t <= b) for a, b in buckets]
+    peak = max(counts)
+    labels = [str(a) if a == b else f"{a}-{b}" for a, b in buckets]
+    label_w = max(len(label) for label in labels)
+    ordered = sorted(trials)
+    median = ordered[len(ordered) // 2]
+    lines = ["trials per eval (distribution across evals):"]
+    for label, count in zip(labels, counts):
+        bar = "█" * max(1 if count else 0, round(width * count / peak))
+        lines.append(f"  n={label:>{label_w}}  {bar} {count}")
+    lines.append(
+        f"  evals: {len(trials)};  trials min {ordered[0]}, "
+        f"median {median}, max {ordered[-1]}, total {sum(trials)}"
+    )
+    return lines
+
+
+def format_k_n_header(target: float, pass_threshold: float) -> str:
+    """Legend line printed once above the per-eval k/n bars."""
+    return (
+        f"k/n per eval, weakest assertion  (█ = k/n, | = θ₀ {target:.3f}, "
+        f"τ = {pass_threshold:.4f}):"
+    )
+
+
+def format_k_n_bar(
+    label: str,
+    passes: int,
+    trials: int,
+    target: float,
+    pass_threshold: float = PASS_THRESHOLD,
+    *,
+    width: int = 30,
+) -> str:
+    """One bar row: ``k/n`` out of ``[0, 1]`` with ``|`` marking ``θ₀``, the
+    PASS/FAIL grade at ``τ`` and the ``δ`` that ``trials`` resolve
+    (``implied_delta``).
+    """
+    frac = passes / trials if trials else 0.0
+    filled = round(width * frac)
+    marker = min(width - 1, round(width * target))
+    cells = ["█" if i < filled else "░" for i in range(width)]
+    cells[marker] = "|" if marker >= filled else "▐"
+    ok = eval_passed(passes, trials, target, pass_threshold=pass_threshold)
+    delta = implied_delta(trials, target, pass_threshold)
+    delta_text = "n/a" if delta is None else f"{delta:.3f}"
+    return (
+        f"  {label}  {''.join(cells)}  {passes:>3}/{trials:<3} {frac:.3f}  "
+        f"{'PASS' if ok else 'FAIL'}  δ={delta_text}"
+    )
+
+
+def format_k_n_summary(
+    results: list[tuple[str, int, int]],
+    target: float,
+    pass_threshold: float = PASS_THRESHOLD,
+    *,
+    planned_delta: float | None = None,
+) -> list[str]:
+    """Aggregate θ₀/δ/τ footer over ``(eval, passes, trials)`` results."""
+    if not results:
+        return []
+    passed = sum(
+        eval_passed(k, n, target, pass_threshold=pass_threshold)
+        for _, k, n in results
+    )
+    total_k = sum(k for _, k, _ in results)
+    total_n = sum(n for _, _, n in results)
+    summary = (
+        f"  evals: {passed}/{len(results)} PASS;  "
+        f"pooled k/n = {total_k}/{total_n} "
+        f"({total_k / total_n if total_n else 0.0:.3f});  "
+        f"θ₀ = {target:.3f};  τ = {pass_threshold:.4f}"
+    )
+    if planned_delta is not None:
+        summary += f";  planned δ = {planned_delta:.3f}"
+    lines = [summary]
+    deltas = [
+        d
+        for _, _, n in results
+        if (d := implied_delta(n, target, pass_threshold)) is not None
+    ]
+    if deltas:
+        lines.append(
+            f"  implied δ: min {min(deltas):.3f}, "
+            f"mean {sum(deltas) / len(deltas):.3f}, max {max(deltas):.3f}"
+        )
+    return lines
 
 
 def trial_outcomes_posterior_summary(

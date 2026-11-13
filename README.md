@@ -177,10 +177,13 @@ target rate that *would* still lock PASS given the same `(k, n)`. For the
 with a bit of room to spare, but wouldn't yet lock a much higher one like
 `0.65`.
 
-It also reports `implied δ (n=…)`: the smallest tolerance δ that the number of
-trials actually graded can resolve (the inverse of `max_trials`). With
-`θ₀=0.6` and the default τ, `n=63` gives `≈0.136` — how finely that eval's
-trial count separates skills below `θ₀-δ` from skills above `θ₀+δ`.
+With `--live-eval-show-posterior` / `--live-eval-verbose`, each eval also
+prints a k/n bar as it finishes (using its weakest assertion, which decides
+the eval's grade): `k/n` out of 1 with `θ₀` marked, the PASS/FAIL grade at τ,
+and the implied `δ` — the smallest tolerance the number of trials graded can
+resolve (the inverse of `max_trials`; `θ₀=0.6`, default τ, `n=63` gives
+`≈0.136`). The end of the run adds a footer (evals passing, pooled k/n, θ₀, τ,
+planned and implied δ) and a bar chart of the trials-per-eval distribution.
 
 ## Why these defaults
 

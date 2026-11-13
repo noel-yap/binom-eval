@@ -16,7 +16,10 @@ from binom_eval import (
     trial_outcomes,
 )
 from binom_eval.grading import _trigger_check
-from binom_eval.plugin import LIVE_EVAL_POSTERIOR_PROPERTY
+from binom_eval.plugin import (
+    LIVE_EVAL_POSTERIOR_PROPERTY,
+    LIVE_EVAL_RESULT_PROPERTY,
+)
 from binom_eval.suite import _pass_summary, _record_count_posteriors
 
 
@@ -301,6 +304,14 @@ def test_pass_summary_not_verbose_returns_one_line_posterior_summary() -> None:
     assert "Trials:" not in summary
 
 
+def _posterior_properties(request: _StubRequest) -> list[tuple[str, str]]:
+    return [
+        (name, value)
+        for name, value in request.node.user_properties
+        if name == LIVE_EVAL_POSTERIOR_PROPERTY
+    ]
+
+
 def test_assertion_test_records_verbose_detail_when_enabled(
     tmp_path: Path,
 ) -> None:
@@ -326,8 +337,8 @@ def test_assertion_test_records_verbose_detail_when_enabled(
         assertion_id="checks-out",
     )
 
-    assert len(request.node.user_properties) == 1
-    name, summary = request.node.user_properties[0]
+    assert len(_posterior_properties(request)) == 1
+    name, summary = _posterior_properties(request)[0]
     assert name == LIVE_EVAL_POSTERIOR_PROPERTY
     assert summary.startswith("positive::checks-out: 6/6 trials passed;")
     assert "Trials:" in summary
@@ -356,8 +367,8 @@ def test_assertion_test_records_posterior_only_when_show_posterior_enabled(
         assertion_id="checks-out",
     )
 
-    assert len(request.node.user_properties) == 1
-    _, summary = request.node.user_properties[0]
+    assert len(_posterior_properties(request)) == 1
+    _, summary = _posterior_properties(request)[0]
     assert summary.startswith("positive::checks-out: 6/6 trials passed;")
     assert "Trials:" not in summary
 
@@ -380,7 +391,7 @@ def test_assertion_test_records_nothing_when_disabled(
         assertion_id="checks-out",
     )
 
-    assert request.node.user_properties == []
+    assert _posterior_properties(request) == []
 
 
 def test_assertion_test_records_nothing_when_failing(
@@ -405,7 +416,7 @@ def test_assertion_test_records_nothing_when_failing(
             assertion_id="checks-out",
         )
 
-    assert request.node.user_properties == []
+    assert _posterior_properties(request) == []
 
 
 def test_expectation_test_records_posterior_per_assertion(
@@ -425,10 +436,64 @@ def test_expectation_test_records_posterior_per_assertion(
         eval_id="positive",
     )
 
-    assert len(request.node.user_properties) == 1
-    _, summary = request.node.user_properties[0]
+    assert len(_posterior_properties(request)) == 1
+    _, summary = _posterior_properties(request)[0]
     assert summary.startswith("positive::checks-out: 6/6 trials passed;")
     assert "Trials:" in summary
+
+
+def test_expectation_test_always_records_weakest_k_n_result(
+    tmp_path: Path,
+) -> None:
+    namespace = _demo_namespace(tmp_path, {"checks-out": lambda r: None})
+    request = _StubRequest()
+
+    namespace["test_eval_expectation"](
+        eval_runs=_passing_runs(),
+        live_eval_target_rate=2.0 / 3.0,
+        live_eval_pass_threshold=PASS_THRESHOLD,
+        live_eval_failure_max_chars=2000,
+        live_eval_verbose=False,
+        live_eval_show_posterior=False,
+        request=request,
+        eval_id="positive",
+    )
+
+    assert request.node.user_properties == [
+        (
+            LIVE_EVAL_RESULT_PROPERTY,
+            ("positive", 6, 6, 2.0 / 3.0, PASS_THRESHOLD),
+        )
+    ]
+
+
+def test_expectation_test_records_result_even_when_failing(
+    tmp_path: Path,
+) -> None:
+    def _always_fails(run: EvalRun) -> None:
+        raise AssertionFailure("nope")
+
+    namespace = _demo_namespace(tmp_path, {"checks-out": _always_fails})
+    request = _StubRequest()
+
+    with pytest.raises(AssertionError):
+        namespace["test_eval_expectation"](
+            eval_runs=_passing_runs(),
+            live_eval_target_rate=2.0 / 3.0,
+            live_eval_pass_threshold=PASS_THRESHOLD,
+            live_eval_failure_max_chars=2000,
+            live_eval_verbose=False,
+            live_eval_show_posterior=False,
+            request=request,
+            eval_id="positive",
+        )
+
+    assert request.node.user_properties == [
+        (
+            LIVE_EVAL_RESULT_PROPERTY,
+            ("positive", 0, 6, 2.0 / 3.0, PASS_THRESHOLD),
+        )
+    ]
 
 
 def test_trigger_test_records_posterior_per_eval(
@@ -447,8 +512,8 @@ def test_trigger_test_records_posterior_per_eval(
         request=request,
     )
 
-    assert len(request.node.user_properties) == 1
-    _, summary = request.node.user_properties[0]
+    assert len(_posterior_properties(request)) == 1
+    _, summary = _posterior_properties(request)[0]
     assert summary.startswith("positive: 6/6 trials passed;")
     assert "Trials:" in summary
     assert "trial 0: passed" in summary

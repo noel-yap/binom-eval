@@ -30,10 +30,12 @@ from binom_eval.grading import (
     trial_outcomes_posterior_summary,
     trial_outcomes_verbose_message,
     trigger_pass_counts,
+    weakest_k_n,
 )
 from binom_eval.plugin import (
     make_eval_runs_fixture,
     record_live_eval_posterior,
+    record_live_eval_result,
 )
 from binom_eval.stream_json import EvalRun, agent_invoked
 
@@ -258,6 +260,21 @@ def register_live_eval_tests(
             handlers,
             live_eval_target_rate,
             pass_threshold=live_eval_pass_threshold,
+        )
+        counts = []
+        for assertion in ev["assertions"]:
+            graded = trial_outcomes(eval_runs[eval_id], handlers[assertion["id"]])
+            counts.append(
+                (sum(1 for _, err in graded if err is None), len(graded))
+            )
+        weakest_passes, weakest_trials = weakest_k_n(counts)
+        record_live_eval_result(
+            request.node,
+            eval_id,
+            weakest_passes,
+            weakest_trials,
+            live_eval_target_rate,
+            live_eval_pass_threshold,
         )
         if not failing and (live_eval_verbose or live_eval_show_posterior):
             for assertion in ev["assertions"]:
