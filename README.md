@@ -177,6 +177,11 @@ target rate that *would* still lock PASS given the same `(k, n)`. For the
 with a bit of room to spare, but wouldn't yet lock a much higher one like
 `0.65`.
 
+It also reports `implied δ (n=…)`: the smallest tolerance δ that the number of
+trials actually graded can resolve (the inverse of `max_trials`). With
+`θ₀=0.6` and the default τ, `n=63` gives `≈0.136` — how finely that eval's
+trial count separates skills below `θ₀-δ` from skills above `θ₀+δ`.
+
 ## Why these defaults
 
 The defaults are tuned for the expected workload: **most eval runs are of

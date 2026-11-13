@@ -10,6 +10,7 @@ from binom_eval.posterior import (
     max_target_at_pass_threshold,
     posterior_pass_prob,
 )
+from binom_eval.planning import implied_delta
 from binom_eval.assertions import (
     AssertionFailure,
     TrialFailure,
@@ -128,11 +129,14 @@ def format_posterior_summary(
     """
     p_good = posterior_pass_prob(passes, trials, target)
     max_target = max_target_at_pass_threshold(passes, trials, pass_threshold)
+    delta = implied_delta(trials, target, pass_threshold)
+    delta_text = "n/a" if delta is None else f"{delta:.3f}"
     return (
         f"{label}: {passes}/{trials} trials passed; "
         f"P(θ ≥ {target:.3f} | k={passes}, n={trials}) = {p_good:.3f}; "
         f"max θ₀ (pass@τ={pass_threshold:.3f} | k={passes}, n={trials}) = "
-        f"{max_target:.3f}"
+        f"{max_target:.3f}; "
+        f"implied δ (n={trials}) = {delta_text}"
     )
 
 

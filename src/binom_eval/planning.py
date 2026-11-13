@@ -149,6 +149,41 @@ def max_trials(
     )
 
 
+def implied_delta(
+    trials: int, target: float, pass_threshold: float = PASS_THRESHOLD
+) -> float | None:
+    """Smallest ``δ`` that ``trials`` fixed trials resolve: the inverse of
+    ``max_trials``.
+
+    With ``k = k_min(trials)``, the smallest ``δ`` such that
+    ``P(Bin(n, θ₀+δ) >= k) >= τ`` and ``P(Bin(n, θ₀-δ) >= k) <= 1-τ``
+    (both are monotone in ``δ``, so bisection finds the boundary). Returns
+    ``None`` if ``trials`` is too few to PASS at all, or if no ``δ`` with
+    ``θ₀ ± δ`` inside ``(0, 1)`` satisfies both conditions.
+    """
+    k = k_min(trials, target, pass_threshold)
+    if k is None:
+        return None
+
+    def resolves(delta: float) -> bool:
+        return (
+            _binom_sf(k, trials, target + delta) >= pass_threshold
+            and _binom_sf(k, trials, target - delta) <= 1.0 - pass_threshold
+        )
+
+    hi = min(target, 1.0 - target) * (1.0 - 1e-9)
+    if not resolves(hi):
+        return None
+    lo = 0.0
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if resolves(mid):
+            hi = mid
+        else:
+            lo = mid
+    return hi
+
+
 def adaptive_outcome_masses(
     max_trials: int,
     theta: float,

@@ -39,8 +39,9 @@ from binom_eval.posterior import (
     posterior_pass_prob,
 )
 from binom_eval.planning import (
-    MAX_TRIALS_CAP, TrialPlan, adaptive_outcome_masses, adaptive_power, k_min,
-    max_trials, min_trials, resolve_trial_bounds, validate_planning_inputs,
+    MAX_TRIALS_CAP, TrialPlan, adaptive_outcome_masses, adaptive_power,
+    implied_delta, k_min, max_trials, min_trials, resolve_trial_bounds,
+    validate_planning_inputs,
 )
 from binom_eval.assertions import (
     AssertionFailure, TrialFailure, _assertion_sections, _capture_trial_failure,
