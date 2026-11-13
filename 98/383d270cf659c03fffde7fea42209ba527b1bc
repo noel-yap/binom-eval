@@ -1,0 +1,31 @@
+README.md
+  s_9ed63694ca3add::t_54a2d3e2c9065d 180-184
+src/binom_eval/__init__.py
+  s_9ed63694ca3add::t_57206cc479bb91 72,226
+src/binom_eval/grading.py
+  s_9ed63694ca3add::t_342a6fa8e82b0e 42-44
+src/binom_eval/planning.py
+  s_9ed63694ca3add::t_866480a0d613a2 152-186
+src/binom_eval/reporting.py
+  s_9ed63694ca3add::t_2e88bde564d9fe 13,132-133,138-139
+tests/test_grading.py
+  s_9ed63694ca3add::t_bc3cd3f0dbbb1d 321
+tests/test_planning.py
+  s_9ed63694ca3add::t_21f5b40c833c38 16,205-231
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "98383d270cf659c03fffde7fea42209ba527b1bc",
+  "prompts": {},
+  "sessions": {
+    "s_9ed63694ca3add": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e290a800-3237-4919-9e8a-f1f8071eecec",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Noel Yap <noel.yap+github.com@gmail.com>"
+    }
+  }
+}
