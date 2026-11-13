@@ -318,7 +318,7 @@ class TestTrialOutcomesGrading:
             posterior_pass_prob(3, 3, TARGET), abs=1e-3
         )
         assert "max θ₀ (pass@τ=" in summary
-        assert "implied δ (n=" in summary
+        assert "implied δ" not in summary  # shown in the per-eval k/n bar
 
     def test_posterior_summary_counts_only_clean_trials(self) -> None:
         outcomes = [
@@ -1294,3 +1294,105 @@ class TestExpandEvals:
             skill_dir,
         )
         assert result["prompt"].endswith(BEFORE_AFTER_PROMPT_INSTRUCTION)
+
+
+class TestKNBar:
+    def test_header_states_theta_and_tau(self):
+        from binom_eval.grading import format_k_n_header
+
+        header = format_k_n_header(0.6, 0.8647)
+        assert "θ₀ 0.600" in header and "τ = 0.8647" in header
+
+    def test_passing_bar_shows_k_n_grade_and_implied_delta(self):
+        from binom_eval.grading import format_k_n_bar
+
+        row = format_k_n_bar("e1", 43, 63, 0.6, PASS_THRESHOLD)
+        assert "e1" in row and "43/63" in row and "0.683" in row
+        assert "PASS" in row and "δ=0.136" in row
+
+    def test_failing_bar_marks_theta_past_the_fill(self):
+        from binom_eval.grading import format_k_n_bar
+
+        row = format_k_n_bar("e2", 20, 63, 0.6, PASS_THRESHOLD)
+        assert "FAIL" in row and "|" in row and "▐" not in row
+
+    def test_theta_marker_overlays_fill_when_k_n_exceeds_theta(self):
+        from binom_eval.grading import format_k_n_bar
+
+        row = format_k_n_bar("x", 3, 3, 0.6, width=10)
+        assert "▐" in row and "░" not in row
+
+    def test_zero_trials_does_not_divide_by_zero(self):
+        from binom_eval.grading import format_k_n_bar
+
+        assert "0/0" in format_k_n_bar("x", 0, 0, 0.6)
+
+    def test_unresolvable_n_shows_na(self):
+        from binom_eval.grading import format_k_n_bar
+
+        assert "δ=n/a" in format_k_n_bar("x", 1, 1, 0.2, PASS_THRESHOLD)
+
+
+class TestKNSummary:
+    def test_empty(self):
+        from binom_eval.grading import format_k_n_summary
+
+        assert format_k_n_summary([], 0.6) == []
+
+    def test_aggregates_k_n_theta_delta_tau(self):
+        from binom_eval.grading import format_k_n_summary
+
+        text = "\n".join(
+            format_k_n_summary(
+                [("e1", 43, 63), ("e2", 20, 63)],
+                0.6,
+                PASS_THRESHOLD,
+                planned_delta=0.125,
+            )
+        )
+        assert "evals: 1/2 PASS" in text
+        assert "pooled k/n = 63/126 (0.500)" in text
+        assert "θ₀ = 0.600" in text and "planned δ = 0.125" in text
+        assert "implied δ: min 0.136, mean 0.136, max 0.136" in text
+
+    def test_omits_delta_stats_when_no_n_resolves(self):
+        from binom_eval.grading import format_k_n_summary
+
+        lines = format_k_n_summary([("x", 1, 1)], 0.2, PASS_THRESHOLD)
+        assert len(lines) == 1 and "planned δ" not in lines[0]
+
+
+class TestWeakestKN:
+    def test_lowest_rate_assertion_represents_eval(self):
+        from binom_eval.grading import weakest_k_n
+
+        assert weakest_k_n([(60, 63), (40, 63), (55, 63)]) == (40, 63)
+
+    def test_single_assertion(self):
+        from binom_eval.grading import weakest_k_n
+
+        assert weakest_k_n([(5, 7)]) == (5, 7)
+
+
+class TestFormatTrialsHistogram:
+    def test_empty(self):
+        from binom_eval.grading import format_trials_histogram
+
+        assert format_trials_histogram([]) == []
+
+    def test_one_row_per_distinct_n_with_counts_and_stats(self):
+        from binom_eval.grading import format_trials_histogram
+
+        lines = format_trials_histogram([3, 3, 3, 63], width=6)
+        assert lines[1] == "  n= 3  ██████ 3"
+        assert lines[2] == "  n=63  ██ 1"
+        assert "evals: 4;  trials min 3, median 3, max 63, total 72" in lines[3]
+
+    def test_groups_into_ranges_when_many_distinct_values(self):
+        from binom_eval.grading import format_trials_histogram
+
+        lines = format_trials_histogram(list(range(1, 41)), max_rows=4)
+        assert len(lines) == 6  # title + 4 ranges + stats
+        assert lines[1].startswith("  n= 1-10")
+        assert lines[4].startswith("  n=31-40")
+        assert lines[1].endswith(" 10")

@@ -24,6 +24,10 @@ from binom_eval.grading import (
     FAILURE_SECTION_MAX_CHARS,
     PASS_THRESHOLD,
     _eval_checks,
+    format_k_n_bar,
+    format_k_n_header,
+    format_k_n_summary,
+    format_trials_histogram,
     load_evals,
     resolve_trial_bounds,
     run_eval_adaptive,
@@ -67,6 +71,7 @@ DEFAULT_TARGET_RATE = 3.0 / 5.0
 DEFAULT_DELTA = 0.125
 
 LIVE_EVAL_POSTERIOR_PROPERTY = "live_eval_posterior"
+LIVE_EVAL_RESULT_PROPERTY = "live_eval_result"
 
 
 def live_eval_pass_output_enabled(config: pytest.Config) -> bool:
@@ -81,6 +86,25 @@ def live_eval_pass_output_enabled(config: pytest.Config) -> bool:
 def record_live_eval_posterior(node: pytest.Item, summary: str) -> None:
     """Attach a posterior summary to a test node for terminal display."""
     node.user_properties.append((LIVE_EVAL_POSTERIOR_PROPERTY, summary))
+
+
+def record_live_eval_result(
+    node: pytest.Item,
+    label: str,
+    passes: int,
+    trials: int,
+    target: float,
+    pass_threshold: float,
+) -> None:
+    """Attach a check's ``(k, n)`` result to a test node for the aggregate
+    k/n chart in the terminal summary.
+    """
+    node.user_properties.append(
+        (
+            LIVE_EVAL_RESULT_PROPERTY,
+            (label, passes, trials, target, pass_threshold),
+        )
+    )
 
 
 class _SessionReporter:
@@ -104,6 +128,9 @@ class _SessionReporter:
         self._model: str = ""
         self._plan_lines: list[str] = []
         self._verbose = verbose
+        self._results: list[tuple[str, int, int]] = []
+        self._target: float | None = None
+        self._pass_threshold: float | None = None
 
     def set_backend(self, backend: str, version: str) -> None:
         self._backend = backend
@@ -120,7 +147,39 @@ class _SessionReporter:
             return [f"{self._backend} CLI: {self._version}"]
         return []
 
+    def _record_result(
+        self,
+        label: str,
+        passes: int,
+        trials: int,
+        target: float,
+        pass_threshold: float,
+    ) -> None:
+        """Remember an eval's ``(k, n)`` and, when pass output is enabled,
+        print its bar right away so results stream as evals finish.
+        """
+        self._results.append((label, passes, trials))
+        self._target = target
+        self._pass_threshold = pass_threshold
+        if not live_eval_pass_output_enabled(self._config):
+            return
+        terminalreporter = self._config.pluginmanager.get_plugin(
+            "terminalreporter"
+        )
+        if terminalreporter is None:
+            return
+        terminalreporter.ensure_newline()
+        if len(self._results) == 1:
+            terminalreporter.write_line(format_k_n_header(target, pass_threshold))
+        terminalreporter.write_line(
+            format_k_n_bar(label, passes, trials, target, pass_threshold)
+        )
+
     def pytest_runtest_logreport(self, report: Any) -> None:
+        if report.when == "call":
+            for name, value in report.user_properties:
+                if name == LIVE_EVAL_RESULT_PROPERTY:
+                    self._record_result(*value)
         if (
             not self._verbose
             or report.when != "call"
@@ -148,6 +207,25 @@ class _SessionReporter:
     ) -> None:
         for line in self._plan_lines:
             terminalreporter.write_line(line)
+        if (
+            self._results
+            and self._target is not None
+            and self._pass_threshold is not None
+            and live_eval_pass_output_enabled(config)
+        ):
+            terminalreporter.write_sep("-", "live-eval k/n summary")
+            for line in format_k_n_summary(
+                self._results,
+                self._target,
+                self._pass_threshold,
+                planned_delta=config.getoption("--live-eval-delta"),
+            ):
+                terminalreporter.write_line(line)
+            terminalreporter.write_line("")
+            for line in format_trials_histogram(
+                [n for _, _, n in self._results]
+            ):
+                terminalreporter.write_line(line)
         parts: list[str] = []
         if self._version:
             parts.append(f"CLI {self._version}")

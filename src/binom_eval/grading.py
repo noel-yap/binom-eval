@@ -52,11 +52,13 @@ from binom_eval.loading import (
 )
 from binom_eval.reporting import (
     FAILURE_SECTION_MAX_CHARS, _format_trial_failure, _truncate_section_body,
-    _verbose_trials_detail, failing_assertions, format_posterior_summary,
-    graded_runs, graded_runs_verbose_message, trial_outcomes,
+    _verbose_trials_detail, failing_assertions, format_k_n_bar,
+    format_k_n_header, format_k_n_summary, format_posterior_summary,
+    format_trials_histogram, graded_runs, graded_runs_verbose_message,
+    trial_outcomes,
     trial_outcomes_failure_message, trial_outcomes_passed,
     trial_outcomes_posterior_summary, trial_outcomes_verbose_message,
-    trigger_pass_counts,
+    trigger_pass_counts, weakest_k_n,
 )
 from binom_eval.driver import (
     BATCH_MAX, _check_failures, _eval_checks, _no_other_skill_check,

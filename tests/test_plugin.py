@@ -1118,3 +1118,105 @@ class TestSessionReporterPlan:
 
         reporter.pytest_terminal_summary(_Terminal(), 0, None)
         assert written == ["trials min=3 max=24", "a note"]
+
+
+class _ChartConfig:
+    """Config stub with the options and plugin manager the k/n output uses."""
+
+    def __init__(self, terminal: Any, *, enabled: bool) -> None:
+        self.pluginmanager = _StubPluginManager(terminal)
+        self._enabled = enabled
+
+    def getoption(self, name: str) -> Any:
+        if name == "--live-eval-delta":
+            return 0.125
+        return self._enabled
+
+
+class TestKNChartAggregation:
+    class _Terminal(_StubTerminalReporter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seps: list[str] = []
+
+        def write_sep(self, _sep: str, title: str = "", **_k: Any) -> None:
+            self.seps.append(title)
+
+    @staticmethod
+    def _report(label: str, k: int, n: int) -> _StubReport:
+        return _StubReport(
+            [
+                (
+                    plugin.LIVE_EVAL_RESULT_PROPERTY,
+                    (label, k, n, 0.6, PASS_THRESHOLD),
+                )
+            ],
+            passed=k >= 43,
+        )
+
+    def test_record_live_eval_result_attaches_user_property(self) -> None:
+        class _Node:
+            user_properties: list[Any] = []
+
+        node = _Node()
+        node.user_properties = []
+        plugin.record_live_eval_result(node, "e1", 4, 5, 0.6, 0.9)
+        assert node.user_properties == [
+            (plugin.LIVE_EVAL_RESULT_PROPERTY, ("e1", 4, 5, 0.6, 0.9))
+        ]
+
+    def test_each_eval_bar_prints_as_it_finishes(self) -> None:
+        terminal = self._Terminal()
+        reporter = plugin._SessionReporter(_ChartConfig(terminal, enabled=True))
+
+        reporter.pytest_runtest_logreport(self._report("e1", 43, 63))
+        assert len(terminal.lines) == 2  # legend + e1 bar
+        assert "k/n per eval" in terminal.lines[0]
+        assert "e1" in terminal.lines[1] and "43/63" in terminal.lines[1]
+        assert "PASS" in terminal.lines[1]
+
+        reporter.pytest_runtest_logreport(self._report("e2", 20, 63))
+        assert len(terminal.lines) == 3  # legend printed only once
+        assert "e2" in terminal.lines[2] and "FAIL" in terminal.lines[2]
+
+    def test_bars_hidden_when_disabled(self) -> None:
+        terminal = self._Terminal()
+        reporter = plugin._SessionReporter(
+            _ChartConfig(terminal, enabled=False)
+        )
+
+        reporter.pytest_runtest_logreport(self._report("e1", 43, 63))
+
+        assert terminal.lines == []
+
+    def test_bars_tolerate_missing_terminal(self) -> None:
+        reporter = plugin._SessionReporter(_ChartConfig(None, enabled=True))
+
+        reporter.pytest_runtest_logreport(self._report("e1", 43, 63))  # no raise
+
+    def test_end_summary_has_stats_and_trials_distribution(self) -> None:
+        terminal = self._Terminal()
+        config = _ChartConfig(terminal, enabled=True)
+        reporter = plugin._SessionReporter(config)
+        for label, k, n in (("e1", 43, 63), ("e2", 20, 63), ("e3", 8, 10)):
+            reporter.pytest_runtest_logreport(self._report(label, k, n))
+        terminal.lines.clear()
+
+        reporter.pytest_terminal_summary(terminal, 0, config)
+
+        text = "\n".join(terminal.lines)
+        assert "live-eval k/n summary" in terminal.seps
+        assert "evals: 2/3 PASS" in text and "planned δ = 0.125" in text
+        assert "trials per eval" in text
+        assert "n=10" in text and "n=63" in text
+        assert "e1" not in text  # per-eval bars are not repeated at the end
+
+    def test_end_summary_omitted_when_disabled(self) -> None:
+        terminal = self._Terminal()
+        config = _ChartConfig(terminal, enabled=False)
+        reporter = plugin._SessionReporter(config)
+        reporter.pytest_runtest_logreport(self._report("e1", 43, 63))
+
+        reporter.pytest_terminal_summary(terminal, 0, config)
+
+        assert terminal.lines == []
