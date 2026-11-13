@@ -210,7 +210,10 @@ class TestImpliedDelta:
         assert implied_delta(min_trials(0.6, TAU) - 1, 0.6, TAU) is None
 
     def test_none_when_no_delta_inside_unit_interval_resolves(self):
-        assert implied_delta(3, 0.99, TAU) is None
+        # A single trial can PASS at θ₀=0.2, but θ₀+δ is capped at 2θ₀=0.4,
+        # which never reaches P(pass) >= τ.
+        assert k_min(1, 0.2, TAU) is not None
+        assert implied_delta(1, 0.2, TAU) is None
 
     def test_is_boundary_of_both_indifference_conditions(self):
         k = k_min(63, 0.6, TAU)
