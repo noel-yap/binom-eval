@@ -115,6 +115,17 @@ push to main
   `git push origin v0.1.0`) skips `tag` and runs `build` and `github-release`
   against that tag. The `tag` job only runs for branch pushes, and a tag already on
   `HEAD` makes it skip, so one commit is never released twice.
+- **Recovering a failed publish:** re-running a failed main-push run does not
+  help, because `tag` finds the tag already on `HEAD` and skips `build` and
+  `github-release`. Instead start the workflow by hand
+  (`gh workflow run release.yml -f tag=vX.Y.Z`, or Actions → Release → Run
+  workflow). A `workflow_dispatch` run skips `tag` and builds + publishes the
+  existing tag; publishing is idempotent (creates the release if missing, then
+  uploads with `--clobber`).
+- **Transient failures:** the artifact download and release creation steps run
+  through `scripts/retry.sh` (5 attempts, exponential backoff capped at 60s,
+  full jitter), so a flaky artifact-storage or API call no longer fails the
+  release outright.
 - **Manual run:** `make release-dry` previews the next version without tagging.
   `make release` (or `make release BUMP=minor|major|patch|X.Y.Z`) cuts a release
   from your machine. It refuses to run unless the tree is clean and `main` is in
