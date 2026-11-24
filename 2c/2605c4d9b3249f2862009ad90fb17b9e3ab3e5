@@ -1,0 +1,35 @@
+src/binom_eval/planning.py
+  h_c58334d516af27 206,210
+  s_c3ebddf61978eb::t_ab12725ca749e8 211
+tests/test_grading.py
+  s_c3ebddf61978eb::t_e67a4124af8c58 21,1144-1151,1169-1189
+  s_c3ebddf61978eb::t_5e502dbff424ac 1131-1132
+  s_c3ebddf61978eb::t_dba29c8da9a18b 59-64,969-1082,1190-1191
+tests/test_planning.py
+  s_c3ebddf61978eb::t_68a870d4009751 277-293
+  s_c3ebddf61978eb::t_8ed4db043a4a34 26,28,331-389
+  s_c3ebddf61978eb::t_8328e9f0dc5a99 390-391
+  s_c3ebddf61978eb::t_5e502dbff424ac 22,31,72-77,79,81-86,271-273
+  s_c3ebddf61978eb::t_7b3b77d7ccec94 67-71,78,80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2c2605c4d9b3249f2862009ad90fb17b9e3ab3e5",
+  "prompts": {},
+  "humans": {
+    "h_c58334d516af27": {
+      "author": "Noel Yap <noel.yap+github.com@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_c3ebddf61978eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6467986e-e8f3-4930-ade7-287db4c7b977",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Noel Yap <noel.yap+github.com@gmail.com>"
+    }
+  }
+}
