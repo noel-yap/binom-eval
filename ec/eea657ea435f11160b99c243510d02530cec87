@@ -1,0 +1,19 @@
+src/binom_eval/planning.py
+  s_c3ebddf61978eb::t_ab12725ca749e8 188-220,244-247,249,254
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eceea657ea435f11160b99c243510d02530cec87",
+  "prompts": {},
+  "sessions": {
+    "s_c3ebddf61978eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6467986e-e8f3-4930-ade7-287db4c7b977",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Noel Yap <noel.yap+github.com@gmail.com>"
+    }
+  }
+}
