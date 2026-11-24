@@ -1,11 +1,15 @@
 name: Release
 
-# Two ways in, one pipeline:
+# Three ways in, one pipeline:
 #   * A push to `main` runs `tag` first. It cuts the next vX.Y.Z tag with
 #     scripts/release.sh --ci, or does nothing when there is nothing to release.
 #     `build` and `github-release` then run in this same run against that tag.
 #     A tag pushed with GITHUB_TOKEN does not start another workflow run, so
 #     the new tag cannot trigger a second release.
+#   * A manual run (workflow_dispatch) with an existing `tag` input skips `tag`
+#     and builds + publishes that tag. Use it to recover a release whose tag was
+#     cut but whose publish failed: re-running a failed main-push run cannot,
+#     because `tag` then finds nothing new to release and skips the rest.
 #   * A version tag pushed by a human (e.g. `git push origin v0.1.0`) skips
 #     `tag` and runs `build` and `github-release` against that tag.
 on:
@@ -13,6 +17,12 @@ on:
     branches: [main]
     # Hand-cut tags, e.g. `v0.1.0`.
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build and release (e.g. v2.11.0)
+        required: true
+        type: string
 
 # Serialize releases so overlapping merges cannot race on tagging. Queued runs
 # are not cancelled: cancelling mid-release could leave a tag with no Release.
@@ -26,8 +36,9 @@ permissions: {}
 jobs:
   tag:
     name: Tag next version
-    # Only for pushes to main. A pushed tag also starts this workflow; skip it.
-    if: github.ref_type == 'branch'
+    # Only for pushes to main. A pushed tag or a manual run also starts this
+    # workflow; skip those.
+    if: github.event_name == 'push' && github.ref_type == 'branch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -56,13 +67,20 @@ jobs:
     name: Build sdist + wheel
     needs: tag
     # Runs after a successful `tag` step (main push that released), or directly
-    # for a pushed version tag. Skipped when `tag` found nothing to release.
+    # for a pushed version tag or a manual run. Skipped when `tag` found nothing
+    # to release.
     if: >-
       always() && needs.tag.result != 'failure' && needs.tag.result != 'cancelled'
-      && (github.ref_type == 'tag' || needs.tag.outputs.tag != '')
+      && (github.event_name == 'workflow_dispatch' || github.ref_type == 'tag'
+          || needs.tag.outputs.tag != '')
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # The tag to release: the manual input, the pushed tag, or the tag the
+      # `tag` job just cut. Resolved once so the checkout and the version check
+      # cannot disagree.
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_type == 'tag' && github.ref_name || needs.tag.outputs.tag }}
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       prerelease: ${{ steps.version.outputs.prerelease }}
@@ -72,7 +90,7 @@ jobs:
         with:
           # Check out the tag, not the branch: on a main push the tag was just
           # created. Full history + tags so hatch-vcs can derive the version.
-          ref: ${{ github.ref_type == 'tag' && github.ref || format('refs/tags/{0}', needs.tag.outputs.tag) }}
+          ref: refs/tags/${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
       - name: Install uv
@@ -93,7 +111,7 @@ jobs:
       - name: Verify tag and classify version
         id: version
         env:
-          TAG: ${{ github.ref_type == 'tag' && github.ref_name || needs.tag.outputs.tag }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           tag="${TAG}"
           version="${tag#v}"
@@ -123,18 +141,37 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # `gh run download` needs to read this run's artifacts.
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.build.outputs.tag }}
+      PRERELEASE: ${{ needs.build.outputs.prerelease }}
     steps:
-      - name: Download distributions
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
+      # Only for scripts/retry.sh; the release itself is made from the tag.
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      # Artifact storage occasionally reports a just-uploaded artifact as
+      # missing ("No artifacts found for ID ..."). Retry with exponential
+      # backoff and jitter instead of failing the release.
+      - name: Download distributions
+        run: bash scripts/retry.sh -- gh run download "${GITHUB_RUN_ID}" --name dist --dir dist
+
+      # Idempotent so a retry (or a manual re-run) after a partial failure is
+      # safe: create the release if absent, then upload the files, replacing
+      # any already attached.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          # Explicit: on a main push GITHUB_REF_NAME is `main`, not the tag.
-          tag_name: ${{ needs.build.outputs.tag }}
-          files: dist/*
-          generate_release_notes: true
-          prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
+        run: |
+          publish() {
+            if ! gh release view "${TAG}" >/dev/null 2>&1; then
+              flags=(--verify-tag --generate-notes)
+              [ "${PRERELEASE}" = "true" ] && flags+=(--prerelease)
+              gh release create "${TAG}" "${flags[@]}"
+            fi
+            gh release upload "${TAG}" dist/* --clobber
+          }
+          export -f publish
+          export TAG PRERELEASE
+          bash scripts/retry.sh -- bash -c 'set -e; publish'
