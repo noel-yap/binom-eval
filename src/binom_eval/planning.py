@@ -203,11 +203,12 @@ def _absorbing_outcome(
     verdict = _verdict(k, n, target, pass_threshold=pass_threshold)
     if verdict is Verdict.PASS:
         return Verdict.PASS
-    if verdict is Verdict.FAIL or pass_unreachable(
+    elif verdict is Verdict.FAIL or pass_unreachable(
         k, n, max_trials - n, target, pass_threshold=pass_threshold
     ):
         return Verdict.FAIL
-    return None
+    else:
+        return None
 
 
 def _spread_mass(nxt: dict[int, float], k: int, mass: float, theta: float) -> None:

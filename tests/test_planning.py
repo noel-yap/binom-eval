@@ -18,15 +18,17 @@ from binom_eval import (
     max_trials,
     min_trials,
     posterior_pass_prob,
-    TrialPlan,
     resolve_trial_bounds,
+    TrialPlan,
 )
-from binom_eval.posterior import Verdict, _verdict
 from binom_eval.planning import (
     MAX_TRIALS_CAP,
+    _absorbing_outcome,
     _binom_sf,
+    _spread_mass,
     validate_planning_inputs,
 )
+from binom_eval.posterior import Verdict, _verdict
 
 TAU = PASS_THRESHOLD
 GRID = [
@@ -60,6 +62,26 @@ def _brute_force_ok(
         and _binom_sf(k, n, target + delta) >= tau
         and _binom_sf(k, n, target - delta) <= 1 - tau
     )
+
+
+def _old_rule_pass_mass(
+    theta: float, max_n: int, target: float, min_n: int = 0
+) -> float:
+    """PASS mass under the old rule, which absorbs only on a locked verdict
+    (and only once ``n >= min_n``)."""
+    pass_mass = 0.0
+    live = {0: 1.0}
+    for n in range(max_n + 1):
+        nxt: dict[int, float] = {}
+        for k, mass in live.items():
+            v = _verdict(k, n, target, pass_threshold=TAU)
+            if n >= min_n and v is Verdict.PASS:
+                pass_mass += mass
+            elif (n < min_n or v is Verdict.UNDETERMINED) and n < max_n:
+                nxt[k + 1] = nxt.get(k + 1, 0.0) + mass * theta
+                nxt[k] = nxt.get(k, 0.0) + mass * (1.0 - theta)
+        live = nxt
+    return pass_mass
 
 
 def _brute_force_max_trials(target: float, delta: float, tau: float) -> int:
@@ -245,22 +267,28 @@ class TestAdaptivePower:
     def test_pass_mass_unchanged_and_nothing_left_exhausted(
         self, theta: float
     ) -> None:
-        # Reference: the old rule, which only absorbs on a locked verdict.
-        old_pass = 0.0
-        live = {0: 1.0}
-        for n in range(23):
-            nxt: dict[int, float] = {}
-            for k, mass in live.items():
-                v = _verdict(k, n, 0.6, pass_threshold=TAU)
-                if v is Verdict.PASS:
-                    old_pass += mass
-                elif v is Verdict.UNDETERMINED and n < 22:
-                    nxt[k + 1] = nxt.get(k + 1, 0.0) + mass * theta
-                    nxt[k] = nxt.get(k, 0.0) + mass * (1.0 - theta)
-            live = nxt
         passed, _failed, exhausted = adaptive_outcome_masses(22, theta, 0.6, TAU)
-        assert passed == pytest.approx(old_pass, abs=1e-12)
+        assert passed == pytest.approx(
+            _old_rule_pass_mass(theta, 22, 0.6), abs=1e-12
+        )
         # Every non-PASS path is absorbed as FAIL once PASS is out of reach.
+        assert exhausted == pytest.approx(0.0, abs=1e-9)
+
+    @pytest.mark.parametrize("min_n", [1, 5, 22])
+    def test_pass_mass_unchanged_by_unreachable_stop_with_min_trials(
+        self, min_n: int
+    ) -> None:
+        passed, failed, exhausted = adaptive_outcome_masses(
+            22, 0.7, 0.6, TAU, min_trials=min_n
+        )
+        assert passed == pytest.approx(
+            _old_rule_pass_mass(0.7, 22, 0.6, min_n), abs=1e-12
+        )
+        assert passed + failed + exhausted == pytest.approx(1.0, abs=1e-9)
+
+    def test_never_passing_skill_is_absorbed_as_fail(self) -> None:
+        passed, failed, exhausted = adaptive_outcome_masses(22, 0.0, 0.6, TAU)
+        assert (passed, failed) == (0.0, pytest.approx(1.0))
         assert exhausted == pytest.approx(0.0, abs=1e-9)
 
     def test_masses_sum_to_one_with_min_trials(self) -> None:
@@ -298,6 +326,67 @@ class TestAdaptivePower:
     def test_power_increases_with_theta(self) -> None:
         powers = [adaptive_power(22, t, 0.6, TAU) for t in (0.4, 0.6, 0.8)]
         assert powers == sorted(powers)
+
+
+class TestAbsorbingOutcome:
+    # Budget 22, target 0.6, TAU. States below were checked with `_verdict`
+    # and `pass_unreachable` and are hard-coded:
+    #   (n=3,  k=3)  -> PASS,         PASS reachable
+    #   (n=3,  k=0)  -> FAIL,         PASS reachable
+    #   (n=22, k=11) -> UNDETERMINED, PASS unreachable (no budget left)
+    #   (n=5,  k=3)  -> UNDETERMINED, PASS reachable
+    @staticmethod
+    def _outcome(k: int, n: int, min_n: int = 0) -> Verdict | None:
+        return _absorbing_outcome(k, n, 22, 0.6, TAU, min_n)
+
+    def test_pass_locked_at_floor_absorbs_as_pass(self) -> None:
+        assert self._outcome(3, 3, min_n=3) is Verdict.PASS
+
+    def test_pass_locked_above_floor_absorbs_as_pass(self) -> None:
+        assert self._outcome(3, 3, min_n=2) is Verdict.PASS
+
+    def test_pass_locked_below_floor_does_not_absorb(self) -> None:
+        assert self._outcome(3, 3, min_n=4) is None
+
+    def test_fail_locked_at_floor_absorbs_as_fail(self) -> None:
+        assert self._outcome(0, 3, min_n=3) is Verdict.FAIL
+
+    def test_fail_locked_above_floor_absorbs_as_fail(self) -> None:
+        assert self._outcome(0, 3, min_n=2) is Verdict.FAIL
+
+    def test_fail_locked_below_floor_does_not_absorb(self) -> None:
+        assert self._outcome(0, 3, min_n=4) is None
+
+    def test_unreachable_pass_alone_absorbs_as_fail(self) -> None:
+        assert self._outcome(11, 22) is Verdict.FAIL
+
+    def test_unreachable_pass_below_floor_does_not_absorb(self) -> None:
+        assert self._outcome(11, 22, min_n=23) is None
+
+    def test_undetermined_with_reachable_pass_does_not_absorb(self) -> None:
+        assert self._outcome(3, 5) is None
+
+
+class TestSpreadMass:
+    def test_splits_mass_between_next_k_and_same_k(self) -> None:
+        nxt: dict[int, float] = {}
+        _spread_mass(nxt, 2, 0.5, 0.25)
+        assert nxt == {3: pytest.approx(0.125), 2: pytest.approx(0.375)}
+
+    def test_accumulates_onto_existing_entries(self) -> None:
+        nxt = {2: 0.1, 3: 0.2}
+        _spread_mass(nxt, 2, 0.5, 0.25)
+        assert nxt == {3: pytest.approx(0.325), 2: pytest.approx(0.475)}
+
+    def test_theta_zero_keeps_all_mass_at_same_k(self) -> None:
+        nxt: dict[int, float] = {}
+        _spread_mass(nxt, 2, 0.5, 0.0)
+        assert nxt == {3: 0.0, 2: 0.5}
+
+    def test_theta_one_moves_all_mass_to_next_k(self) -> None:
+        nxt: dict[int, float] = {}
+        _spread_mass(nxt, 2, 0.5, 1.0)
+        assert nxt == {3: 0.5, 2: 0.0}
 
 
 def _resolve(**kw: object):

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,12 @@ from binom_eval import (
     trial_outcomes_posterior_summary,
     trial_outcomes_verbose_message,
     trigger_pass_counts,
+)
+from binom_eval.driver import (
+    _fail_is_fixed,
+    _passes_per_check,
+    _stop_batch,
+    _undetermined_shortfalls,
 )
 from binom_eval.grading import Verdict, _betainc, _resolve_shortfall, _verdict
 from binom_eval.posterior import pass_unreachable
@@ -959,6 +966,120 @@ class TestNextBatchSize:
         assert next_batch_size(runs, [_skill_check, check_text], 21, TARGET) == 0
 
 
+class TestStopBatch:
+    """The batch size that stands in for "stop" while the floor is unmet."""
+
+    def test_runs_up_to_the_floor_when_below_it(self) -> None:
+        assert _stop_batch(4, 10, 20) == 6
+
+    def test_stops_when_exactly_at_the_floor(self) -> None:
+        assert _stop_batch(10, 10, 20) == 0
+
+    def test_runs_one_trial_when_one_below_the_floor(self) -> None:
+        assert _stop_batch(9, 10, 20) == 1
+
+    def test_stops_when_above_the_floor(self) -> None:
+        assert _stop_batch(11, 10, 20) == 0
+
+    def test_caps_the_catch_up_at_the_remaining_budget(self) -> None:
+        assert _stop_batch(4, 10, 2) == 2
+
+    def test_does_not_cap_the_catch_up_when_budget_covers_it(self) -> None:
+        assert _stop_batch(4, 10, 6) == 6
+
+    def test_zero_floor_never_postpones_the_stop(self) -> None:
+        assert _stop_batch(0, 0, 20) == 0
+
+
+class TestFailIsFixed:
+    """A check fixes the eval as FAIL by a locked posterior or unreachable PASS.
+
+    Target 2/3, default PASS_THRESHOLD unless stated.
+    """
+
+    def test_fixed_when_posterior_is_fail_locked_with_pass_still_reachable(
+        self,
+    ) -> None:
+        # 0/3 is FAIL-locked, yet 18 more trials could still reach PASS.
+        assert _verdict(0, 3, TARGET) is Verdict.FAIL
+        assert not pass_unreachable(0, 3, 18, TARGET)
+        assert _fail_is_fixed(0, 3, TARGET, 18, PASS_THRESHOLD)
+
+    def test_fixed_when_pass_is_unreachable_with_posterior_undetermined(
+        self,
+    ) -> None:
+        # 2/4 is inside the band, but 4 more trials cannot clear PASS.
+        assert _verdict(2, 4, TARGET) is Verdict.UNDETERMINED
+        assert _fail_is_fixed(2, 4, TARGET, 4, PASS_THRESHOLD)
+
+    def test_not_fixed_when_undetermined_and_pass_still_reachable(self) -> None:
+        # Same 2/4 history, but 14 more trials leave room to recover.
+        assert not _fail_is_fixed(2, 4, TARGET, 14, PASS_THRESHOLD)
+
+    def test_not_fixed_when_pass_locked(self) -> None:
+        assert _verdict(6, 6, TARGET) is Verdict.PASS
+        assert not _fail_is_fixed(6, 6, TARGET, 15, PASS_THRESHOLD)
+
+
+class TestPassesPerCheck:
+    """Passing-trial count per check over the graded runs."""
+
+    def test_counts_passes_for_each_check_separately(self) -> None:
+        def check_text(run: EvalRun) -> None:
+            if not run.assistant_text:
+                raise AssertionFailure("text")
+
+        runs = [
+            EvalRun(eval_id="t", prompt="", skill_invoked=inv, assistant_text=t)
+            for inv, t in zip([True, True, True, False], ["x", "", "", ""])
+        ]
+        assert _passes_per_check(runs, [_skill_check, check_text]) == [3, 1]
+
+    def test_no_checks_yields_no_counts(self) -> None:
+        assert _passes_per_check(_runs(True, False), []) == []
+
+    def test_no_runs_yields_zero_passes(self) -> None:
+        assert _passes_per_check([], [_skill_check]) == [0]
+
+    def test_errored_runs_are_excluded_from_the_graded_total(self) -> None:
+        # An errored run left in the list would be graded as a failure, so
+        # the count over the graded runs must stay 3.
+        graded = graded_runs(_runs(True, True, True) + [_errored_run()])
+        assert _passes_per_check(graded, [_skill_check]) == [3]
+
+
+class TestUndeterminedShortfalls:
+    """Shortfalls are reported only for checks whose verdict is undetermined.
+
+    Target 2/3; `trials` is passed directly with a remaining budget of 16.
+    """
+
+    def test_includes_an_undetermined_check(self) -> None:
+        assert _undetermined_shortfalls([4], 5, TARGET, 16, PASS_THRESHOLD) == [4]
+
+    def test_excludes_a_pass_locked_check(self) -> None:
+        assert _verdict(6, 6, TARGET) is Verdict.PASS
+        assert _undetermined_shortfalls([6], 6, TARGET, 15, PASS_THRESHOLD) == []
+
+    def test_excludes_a_fail_locked_check(self) -> None:
+        assert _verdict(0, 3, TARGET) is Verdict.FAIL
+        assert _undetermined_shortfalls([0], 3, TARGET, 18, PASS_THRESHOLD) == []
+
+    def test_keeps_only_undetermined_checks_among_mixed_verdicts(self) -> None:
+        # trials=5: 5/5 PASS-locked, 0/5 FAIL-locked, 4/5 and 3/5 undetermined.
+        assert _verdict(5, 5, TARGET) is Verdict.PASS
+        assert _verdict(0, 5, TARGET) is Verdict.FAIL
+        assert _undetermined_shortfalls(
+            [5, 4, 0, 3], 5, TARGET, 16, PASS_THRESHOLD
+        ) == [
+            _resolve_shortfall(4, 5, TARGET, 16),
+            _resolve_shortfall(3, 5, TARGET, 16),
+        ]
+
+    def test_no_checks_yields_no_shortfalls(self) -> None:
+        assert _undetermined_shortfalls([], 5, TARGET, 16, PASS_THRESHOLD) == []
+
+
 class TestPassUnreachableStop:
     """`next_batch_size` stops once PASS cannot be reached in the budget."""
 
@@ -971,12 +1092,10 @@ class TestPassUnreachableStop:
 
     def test_stops_when_pass_unreachable_within_budget(self) -> None:
         runs = _runs(*self.HISTORY)
-        assert pass_unreachable(2, 4, 4, TARGET)
         assert next_batch_size(runs, [_skill_check], 8, TARGET) == 0
 
     def test_keeps_going_when_pass_still_reachable(self) -> None:
         runs = _runs(*self.HISTORY)
-        assert not pass_unreachable(2, 4, 36, TARGET)
         assert next_batch_size(runs, [_skill_check], 40, TARGET) > 0
 
     def test_min_trials_floor_postpones_the_stop(self) -> None:
@@ -1009,7 +1128,8 @@ class TestPassUnreachableStop:
         assert next_batch_size(_runs(*self.HISTORY), [_skill_check], 14, TARGET) > 0
 
     def test_errored_trials_are_not_read_as_failures(self) -> None:
-        # 3/3 graded passes with errored trials must not look unreachable.
+        # 4/5 graded with an errored trial: the error must not be read as a
+        # failure, so PASS stays reachable (budget 10 - 6 = 4 remain, shortfall 3).
         runs = _runs(True, True, True, True, False) + [_errored_run()]
         assert next_batch_size(runs, [_skill_check], 10, TARGET) == 3
 
@@ -1020,6 +1140,14 @@ class TestPassUnreachableStop:
             new = self._simulate_final_grade(outcomes, max_n, stop_unreachable=True)
             assert new[0] == old[0], outcomes
             assert new[1] <= old[1], outcomes
+
+    def test_unreachable_stop_saves_a_trial_on_a_known_history(self) -> None:
+        # PASS becomes unreachable after 8 of 9 trials without any FAIL lock.
+        outcomes = (True, True, True, False, True, True, True, False, True)
+        old = self._simulate_final_grade(outcomes, 9, stop_unreachable=False)
+        new = self._simulate_final_grade(outcomes, 9, stop_unreachable=True)
+        assert (new[1], old[1]) == (8, 9)
+        assert new[0] == old[0]
 
     @staticmethod
     def _simulate_final_grade(
@@ -1036,6 +1164,29 @@ class TestPassUnreachableStop:
             k += outcomes[n]
             n += 1
         return eval_passed(k, n, TARGET), n
+
+
+class TestPassUnreachable:
+    """`pass_unreachable` compares the all-pass best case with the threshold."""
+
+    def test_boundary_exactly_at_threshold_is_unreachable(self) -> None:
+        best = posterior_pass_prob(2 + 4, 4 + 4, TARGET)
+        assert pass_unreachable(2, 4, 4, TARGET, pass_threshold=best)
+
+    def test_boundary_just_below_threshold_is_reachable(self) -> None:
+        best = posterior_pass_prob(2 + 4, 4 + 4, TARGET)
+        just_below = math.nextafter(best, 0.0)
+        assert not pass_unreachable(2, 4, 4, TARGET, pass_threshold=just_below)
+
+    def test_more_remaining_budget_makes_pass_reachable(self) -> None:
+        assert pass_unreachable(2, 4, 4, TARGET)
+        assert not pass_unreachable(2, 4, 36, TARGET)
+
+    def test_no_budget_left_and_below_threshold_is_unreachable(self) -> None:
+        assert pass_unreachable(2, 4, 0, TARGET)
+
+    def test_no_budget_left_but_already_above_threshold_is_reachable(self) -> None:
+        assert not pass_unreachable(12, 12, 0, TARGET)
 
 
 class TestRunEvalAdaptive:
