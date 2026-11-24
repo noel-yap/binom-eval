@@ -1,0 +1,29 @@
+AGENTS.md
+  s_8aaea6586d5f28::t_e1cf68bd84ad15 118-128
+.github/workflows/release.yml
+  s_8aaea6586d5f28::t_646b5dbd429b48 3,9-12,20-25,39-41,70-71,74-75,79,144-150,152-158,160,162-164,166-176
+  s_8aaea6586d5f28::t_aaed924eac3409 80-83,93,114,177
+tests/test_retry_script.py
+  s_8aaea6586d5f28::t_f2608af8f02c56 1-59,61-77,79-187,192-209
+  s_8aaea6586d5f28::t_5ea7f7c13d1d53 78
+  s_8aaea6586d5f28::t_87ccb570fe0170 60
+  s_8aaea6586d5f28::t_05d54081432afb 188-191
+scripts/retry.sh
+  s_8aaea6586d5f28::t_e164d5ea178333 1-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2ee92b4d913c8d639461efd4328a4bd9f7776ac6",
+  "prompts": {},
+  "sessions": {
+    "s_8aaea6586d5f28": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6a19a39-0184-4958-b525-422fd488c05e",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Noel Yap <noel.yap+github.com@gmail.com>"
+    }
+  }
+}
