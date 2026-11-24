@@ -16,6 +16,7 @@ the prior Beta(1, 1), and `BATCH_MAX` of 3.
 
 from __future__ import annotations
 
+import itertools
 import json
 from pathlib import Path
 
@@ -55,6 +56,7 @@ from binom_eval import (
     trigger_pass_counts,
 )
 from binom_eval.grading import Verdict, _betainc, _resolve_shortfall, _verdict
+from binom_eval.posterior import pass_unreachable
 
 TARGET = 2.0 / 3.0
 
@@ -239,11 +241,12 @@ class TestErroredRunExclusion:
         )
 
     def test_errored_trials_still_spend_the_budget(self) -> None:
-        # 20 trials done (5 graded, 15 errored): one trial of budget remains.
-        runs = _runs(True, True, True, True, False) + [
-            _errored_run() for _ in range(15)
-        ]
-        assert next_batch_size(runs, [_skill_check], 21, TARGET) == 1
+        # 4/5 graded with budget 9: 4 trials remain and PASS is reachable.
+        # An errored sixth trial spends one, leaving 3 -- too few to reach PASS.
+        graded = _runs(True, True, True, True, False)
+        assert next_batch_size(graded, [_skill_check], 9, TARGET, batch_max=99) == 4
+        runs = graded + [_errored_run()]
+        assert next_batch_size(runs, [_skill_check], 9, TARGET) == 0
 
     def test_failing_assertions_counts_only_graded_trials(self) -> None:
         # 6/6 graded passes clears the bar; the errored trials must not be
@@ -882,9 +885,10 @@ class TestNextBatchSize:
         raise AssertionError("no state with a sub-cap shortfall found")
 
     def test_caps_batch_at_remaining_budget(self) -> None:
-        # 20 runs done, still undetermined: only 1 trial of budget remains.
-        runs = _runs(*([True] * 13 + [False] * 7))
-        assert next_batch_size(runs, [_skill_check], 21, TARGET) == 1
+        # 4/5 is undetermined; the optimistic shortfall (4) is exactly the
+        # remaining budget, so the uncapped batch equals it.
+        runs = _runs(True, True, True, True, False)
+        assert next_batch_size(runs, [_skill_check], 9, TARGET, batch_max=99) == 4
 
     def test_takes_largest_shortfall_across_checks(self) -> None:
         def check_text(run: EvalRun) -> None:
@@ -953,6 +957,85 @@ class TestNextBatchSize:
             for inv in [True, True, True, True, False]
         ]
         assert next_batch_size(runs, [_skill_check, check_text], 21, TARGET) == 0
+
+
+class TestPassUnreachableStop:
+    """`next_batch_size` stops once PASS cannot be reached in the budget."""
+
+    # F,P,P,F at target 2/3: p_good ~0.21 is inside the band (not FAIL-locked)
+    # yet even all-pass for the remaining trials stays <= PASS_THRESHOLD.
+    HISTORY = (False, True, True, False)
+
+    def test_history_is_undetermined_not_fail_locked(self) -> None:
+        assert _verdict(2, 4, TARGET) is Verdict.UNDETERMINED
+
+    def test_stops_when_pass_unreachable_within_budget(self) -> None:
+        runs = _runs(*self.HISTORY)
+        assert pass_unreachable(2, 4, 4, TARGET)
+        assert next_batch_size(runs, [_skill_check], 8, TARGET) == 0
+
+    def test_keeps_going_when_pass_still_reachable(self) -> None:
+        runs = _runs(*self.HISTORY)
+        assert not pass_unreachable(2, 4, 36, TARGET)
+        assert next_batch_size(runs, [_skill_check], 40, TARGET) > 0
+
+    def test_min_trials_floor_postpones_the_stop(self) -> None:
+        runs = _runs(*self.HISTORY)
+        assert (
+            next_batch_size(runs, [_skill_check], 8, TARGET, min_trials=6) == 2
+        )
+
+    def test_one_unreachable_check_stops_the_eval(self) -> None:
+        def check_text(run: EvalRun) -> None:
+            if not run.assistant_text:
+                raise AssertionFailure("text")
+
+        # assistant_text is 3/4 (PASS reachable in 5 more trials); skill_invoked
+        # is F,P,P,F (2/4: not reachable in 5).
+        runs = [
+            EvalRun(eval_id="t", prompt="", skill_invoked=inv, assistant_text=t)
+            for inv, t in zip(self.HISTORY, ["x", "x", "x", ""])
+        ]
+        assert next_batch_size(runs, [check_text], 9, TARGET) > 0
+        assert next_batch_size(runs, [_skill_check], 9, TARGET) == 0
+        assert next_batch_size(runs, [check_text, _skill_check], 9, TARGET) == 0
+
+    def test_errored_trials_do_not_count_toward_the_posterior(self) -> None:
+        # Two errored trials spend budget (remaining 8 - 6 = 2) but add no
+        # evidence: the posterior stays 2/4, unreachable with 2 left.
+        runs = _runs(*self.HISTORY) + [_errored_run(), _errored_run()]
+        assert next_batch_size(runs, [_skill_check], 8, TARGET) == 0
+        # Without them the same graded history still has budget to recover.
+        assert next_batch_size(_runs(*self.HISTORY), [_skill_check], 14, TARGET) > 0
+
+    def test_errored_trials_are_not_read_as_failures(self) -> None:
+        # 3/3 graded passes with errored trials must not look unreachable.
+        runs = _runs(True, True, True, True, False) + [_errored_run()]
+        assert next_batch_size(runs, [_skill_check], 10, TARGET) == 3
+
+    def test_verdicts_unchanged_versus_old_rule_exhaustively(self) -> None:
+        max_n = 9
+        for outcomes in itertools.product([True, False], repeat=max_n):
+            old = self._simulate_final_grade(outcomes, max_n, stop_unreachable=False)
+            new = self._simulate_final_grade(outcomes, max_n, stop_unreachable=True)
+            assert new[0] == old[0], outcomes
+            assert new[1] <= old[1], outcomes
+
+    @staticmethod
+    def _simulate_final_grade(
+        outcomes: tuple[bool, ...], max_n: int, *, stop_unreachable: bool
+    ) -> tuple[bool, int]:
+        """(passed, trials run) for one-trial-at-a-time driving."""
+        k = n = 0
+        while n < max_n:
+            verdict = _verdict(k, n, TARGET)
+            if verdict is not Verdict.UNDETERMINED and n > 0:
+                break
+            if stop_unreachable and pass_unreachable(k, n, max_n - n, TARGET):
+                break
+            k += outcomes[n]
+            n += 1
+        return eval_passed(k, n, TARGET), n
 
 
 class TestRunEvalAdaptive:

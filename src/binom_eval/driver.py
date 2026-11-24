@@ -8,7 +8,13 @@ from typing import Any
 
 from binom_eval.runner import DEFAULT_TIMEOUT_SECONDS, Runner, run_eval_batch
 from binom_eval.stream_json import EvalRun
-from binom_eval.posterior import PASS_THRESHOLD, Verdict, _verdict, posterior_pass_prob
+from binom_eval.posterior import (
+    PASS_THRESHOLD,
+    Verdict,
+    _verdict,
+    pass_unreachable,
+    posterior_pass_prob,
+)
 from binom_eval.assertions import assert_check
 from binom_eval.reporting import graded_runs, trial_outcomes
 from binom_eval.progress import ProgressEvent, ProgressRenderer
@@ -169,7 +175,8 @@ def next_batch_size(
 ) -> int:
     """How many trials to run next, or 0 once the verdict is fixed.
 
-    The eval fails as soon as *any* check's posterior locks FAIL, and passes
+    The eval fails as soon as *any* check's posterior locks FAIL (or can no
+    longer reach PASS within the remaining budget), and passes
     only once *every* check locks PASS; in between it is undetermined. Given the
     runs so far this returns 0 when the eval is decided (some check FAIL, or
     all checks PASS) or the `max_trials` budget is spent, and otherwise an
@@ -211,6 +218,12 @@ def next_batch_size(
         )
         if verdict is Verdict.FAIL:
             # Eval already fails; no batch can change that.
+            return stop_batch
+        if pass_unreachable(
+            passes, trials_done, remaining, target, pass_threshold=pass_threshold
+        ):
+            # Every check must pass, so one that cannot reach PASS within the
+            # budget fixes the eval as FAIL; more trials only waste cost.
             return stop_batch
         if verdict is Verdict.UNDETERMINED:
             shortfalls.append(

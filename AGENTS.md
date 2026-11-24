@@ -157,7 +157,7 @@ push to main
 - `p_good = P(θ ≥ TARGET_RATE | k, n)` via `_betainc` (Lentz continued fraction, stdlib only).
 - PASS once `p_good > PASS_THRESHOLD` (≈0.865), FAIL once `p_good < FAIL_THRESHOLD` (≈0.135);
   the PASS edge is overridable per run via `--live-eval-pass-threshold`.
-- Adaptive: `next_batch_size` (`batch_max`, from `--live-eval-batch-max`, default `BATCH_MAX`) computes the optimistic shortfall per undetermined check, takes the largest shortfall, capped at `batch_max` (3 by default, no floor) and the remaining budget.
+- Adaptive: `next_batch_size` (`batch_max`, from `--live-eval-batch-max`, default `BATCH_MAX`) computes the optimistic shortfall per undetermined check, takes the largest shortfall, capped at `batch_max` (3 by default, no floor) and the remaining budget. It stops (subject to `min_trials`) when a check locks FAIL *or* when PASS is unreachable even if every remaining trial passed (`pass_unreachable`); the verdict is then fixed FAIL, so only trial counts drop. `adaptive_outcome_masses` models the same stop.
 - No separate tiebreak: `eval_passed` grades on the same `pass_threshold` as
   the verdict band's PASS edge, so a check that exhausts `MAX_TRIALS` still
   inside the band grades FAIL.

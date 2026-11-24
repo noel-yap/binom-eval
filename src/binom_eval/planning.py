@@ -28,6 +28,7 @@ from binom_eval.posterior import (
     PASS_THRESHOLD,
     Verdict,
     _verdict,
+    pass_unreachable,
     posterior_pass_prob,
 )
 
@@ -195,10 +196,12 @@ def adaptive_outcome_masses(
     """Exact ``(P(PASS), P(FAIL), P(exhausted undetermined))`` for a skill at
     true rate ``theta`` under one-trial-at-a-time adaptive stopping.
 
-    A state ``(n, k)`` absorbs once ``_verdict`` locks PASS or FAIL and
+    A state ``(n, k)`` absorbs once ``_verdict`` locks PASS or FAIL (or PASS
+    becomes unreachable in the remaining budget, counted as FAIL) and
     ``n >= min_trials``; a path still undetermined at ``max_trials`` grades
-    FAIL (see ``eval_passed``) but is reported separately. The three masses
-    sum to 1.
+    FAIL (see ``eval_passed``) but is reported separately -- though with the
+    unreachable-PASS stop such paths are absorbed as FAIL first, so that mass
+    is ~0. The three masses sum to 1.
     """
     passed = failed = 0.0
     live = {0: 1.0}  # k -> probability mass, all at the current n
@@ -208,11 +211,17 @@ def adaptive_outcome_masses(
             verdict = _verdict(k, n, target, pass_threshold=pass_threshold)
             if n >= min_trials and verdict is Verdict.PASS:
                 passed += mass
-            elif n >= min_trials and verdict is Verdict.FAIL:
+            elif n >= min_trials and (
+                verdict is Verdict.FAIL
+                or pass_unreachable(
+                    k, n, max_trials - n, target, pass_threshold=pass_threshold
+                )
+            ):
+                # Mirrors `next_batch_size`: PASS out of reach fixes FAIL.
                 failed += mass
-            elif n == max_trials:
-                continue  # exhausted; accounted for below
             else:
+                # At n == max_trials the next layer is never read, so mass
+                # still undetermined there is accounted for as `exhausted`.
                 nxt[k + 1] = nxt.get(k + 1, 0.0) + mass * theta
                 nxt[k] = nxt.get(k, 0.0) + mass * (1.0 - theta)
         live = nxt

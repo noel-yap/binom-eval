@@ -18,8 +18,10 @@ from binom_eval import (
     max_trials,
     min_trials,
     posterior_pass_prob,
+    TrialPlan,
     resolve_trial_bounds,
 )
+from binom_eval.posterior import Verdict, _verdict
 from binom_eval.planning import (
     MAX_TRIALS_CAP,
     _binom_sf,
@@ -239,6 +241,28 @@ class TestAdaptivePower:
         assert sum(masses) == pytest.approx(1.0, abs=1e-9)
         assert min(masses) >= 0
 
+    @pytest.mark.parametrize("theta", [0.3, 0.6, 0.8])
+    def test_pass_mass_unchanged_and_nothing_left_exhausted(
+        self, theta: float
+    ) -> None:
+        # Reference: the old rule, which only absorbs on a locked verdict.
+        old_pass = 0.0
+        live = {0: 1.0}
+        for n in range(23):
+            nxt: dict[int, float] = {}
+            for k, mass in live.items():
+                v = _verdict(k, n, 0.6, pass_threshold=TAU)
+                if v is Verdict.PASS:
+                    old_pass += mass
+                elif v is Verdict.UNDETERMINED and n < 22:
+                    nxt[k + 1] = nxt.get(k + 1, 0.0) + mass * theta
+                    nxt[k] = nxt.get(k, 0.0) + mass * (1.0 - theta)
+            live = nxt
+        passed, _failed, exhausted = adaptive_outcome_masses(22, theta, 0.6, TAU)
+        assert passed == pytest.approx(old_pass, abs=1e-12)
+        # Every non-PASS path is absorbed as FAIL once PASS is out of reach.
+        assert exhausted == pytest.approx(0.0, abs=1e-9)
+
     def test_masses_sum_to_one_with_min_trials(self) -> None:
         masses = adaptive_outcome_masses(22, 0.8, 0.6, TAU, min_trials=5)
         assert sum(masses) == pytest.approx(1.0, abs=1e-9)
@@ -280,6 +304,28 @@ def _resolve(**kw: object):
     args = dict(delta=0.2, min_explicit=None, max_explicit=None)
     args.update(kw)
     return resolve_trial_bounds(0.6, TAU, 3, **args)  # type: ignore[arg-type]
+
+
+class TestBinomSfEdges:
+    def test_non_positive_k_is_certain(self) -> None:
+        assert _binom_sf(0, 5, 0.5) == 1.0
+
+    def test_k_above_trials_is_impossible(self) -> None:
+        assert _binom_sf(6, 5, 0.5) == 0.0
+
+
+class TestTrialPlanSummary:
+    def test_bounds_only_when_nothing_derived(self) -> None:
+        assert TrialPlan(min_trials=3, max_trials=5).summary() == "trials min=3 max=5"
+
+    def test_includes_each_derived_value(self) -> None:
+        plan = TrialPlan(
+            min_trials=3, max_trials=5, derived_min=2, derived_max=4, power=0.5
+        )
+        assert plan.summary() == (
+            "trials min=3 max=5; derived N_min=2; derived N_max=4; "
+            "adaptive power at N_max=0.500"
+        )
 
 
 class TestResolveTrialBounds:
