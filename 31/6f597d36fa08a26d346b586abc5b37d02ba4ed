@@ -1,0 +1,19 @@
+src/binom_eval/driver.py
+  s_c3ebddf61978eb::t_c5e03b48b78a88 166-218,258,261-264,266-271,274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "316f597d36fa08a26d346b586abc5b37d02ba4ed",
+  "prompts": {},
+  "sessions": {
+    "s_c3ebddf61978eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6467986e-e8f3-4930-ade7-287db4c7b977",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Noel Yap <noel.yap+github.com@gmail.com>"
+    }
+  }
+}
