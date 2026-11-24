@@ -185,6 +185,39 @@ def implied_delta(
     return hi
 
 
+def _absorbing_outcome(
+    k: int,
+    n: int,
+    max_trials: int,
+    target: float,
+    pass_threshold: float,
+    min_trials: int,
+) -> Verdict | None:
+    """``Verdict.PASS`` / ``Verdict.FAIL`` if state ``(n, k)`` absorbs, else
+    ``None`` (keep running trials). Nothing absorbs before ``min_trials``;
+    PASS out of reach in the remaining budget counts as FAIL, mirroring
+    `next_batch_size`.
+    """
+    if n < min_trials:
+        return None
+    verdict = _verdict(k, n, target, pass_threshold=pass_threshold)
+    if verdict is Verdict.PASS:
+        return Verdict.PASS
+    if verdict is Verdict.FAIL or pass_unreachable(
+        k, n, max_trials - n, target, pass_threshold=pass_threshold
+    ):
+        return Verdict.FAIL
+    return None
+
+
+def _spread_mass(nxt: dict[int, float], k: int, mass: float, theta: float) -> None:
+    """Advance one binomial-walk step: split ``mass`` at ``k`` passes into the
+    next layer, to ``k + 1`` with probability ``theta`` and to ``k`` otherwise.
+    """
+    nxt[k + 1] = nxt.get(k + 1, 0.0) + mass * theta
+    nxt[k] = nxt.get(k, 0.0) + mass * (1.0 - theta)
+
+
 def adaptive_outcome_masses(
     max_trials: int,
     theta: float,
@@ -208,22 +241,17 @@ def adaptive_outcome_masses(
     for n in range(max_trials + 1):
         nxt: dict[int, float] = {}
         for k, mass in live.items():
-            verdict = _verdict(k, n, target, pass_threshold=pass_threshold)
-            if n >= min_trials and verdict is Verdict.PASS:
+            outcome = _absorbing_outcome(
+                k, n, max_trials, target, pass_threshold, min_trials
+            )
+            if outcome is Verdict.PASS:
                 passed += mass
-            elif n >= min_trials and (
-                verdict is Verdict.FAIL
-                or pass_unreachable(
-                    k, n, max_trials - n, target, pass_threshold=pass_threshold
-                )
-            ):
-                # Mirrors `next_batch_size`: PASS out of reach fixes FAIL.
+            elif outcome is Verdict.FAIL:
                 failed += mass
             else:
                 # At n == max_trials the next layer is never read, so mass
                 # still undetermined there is accounted for as `exhausted`.
-                nxt[k + 1] = nxt.get(k + 1, 0.0) + mass * theta
-                nxt[k] = nxt.get(k, 0.0) + mass * (1.0 - theta)
+                _spread_mass(nxt, k, mass, theta)
         live = nxt
     exhausted = max(0.0, 1.0 - passed - failed)
     return passed, failed, exhausted
