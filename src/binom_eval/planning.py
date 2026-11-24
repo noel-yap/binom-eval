@@ -28,6 +28,7 @@ from binom_eval.posterior import (
     PASS_THRESHOLD,
     Verdict,
     _verdict,
+    pass_unreachable,
     posterior_pass_prob,
 )
 
@@ -184,6 +185,40 @@ def implied_delta(
     return hi
 
 
+def _absorbing_outcome(
+    k: int,
+    n: int,
+    max_trials: int,
+    target: float,
+    pass_threshold: float,
+    min_trials: int,
+) -> Verdict | None:
+    """``Verdict.PASS`` / ``Verdict.FAIL`` if state ``(n, k)`` absorbs, else
+    ``None`` (keep running trials). Nothing absorbs before ``min_trials``;
+    PASS out of reach in the remaining budget counts as FAIL, mirroring
+    `next_batch_size`.
+    """
+    if n < min_trials:
+        return None
+    verdict = _verdict(k, n, target, pass_threshold=pass_threshold)
+    if verdict is Verdict.PASS:
+        return Verdict.PASS
+    elif verdict is Verdict.FAIL or pass_unreachable(
+        k, n, max_trials - n, target, pass_threshold=pass_threshold
+    ):
+        return Verdict.FAIL
+    else:
+        return None
+
+
+def _spread_mass(nxt: dict[int, float], k: int, mass: float, theta: float) -> None:
+    """Advance one binomial-walk step: split ``mass`` at ``k`` passes into the
+    next layer, to ``k + 1`` with probability ``theta`` and to ``k`` otherwise.
+    """
+    nxt[k + 1] = nxt.get(k + 1, 0.0) + mass * theta
+    nxt[k] = nxt.get(k, 0.0) + mass * (1.0 - theta)
+
+
 def adaptive_outcome_masses(
     max_trials: int,
     theta: float,
@@ -195,26 +230,29 @@ def adaptive_outcome_masses(
     """Exact ``(P(PASS), P(FAIL), P(exhausted undetermined))`` for a skill at
     true rate ``theta`` under one-trial-at-a-time adaptive stopping.
 
-    A state ``(n, k)`` absorbs once ``_verdict`` locks PASS or FAIL and
+    A state ``(n, k)`` absorbs once ``_verdict`` locks PASS or FAIL (or PASS
+    becomes unreachable in the remaining budget, counted as FAIL) and
     ``n >= min_trials``; a path still undetermined at ``max_trials`` grades
-    FAIL (see ``eval_passed``) but is reported separately. The three masses
-    sum to 1.
+    FAIL (see ``eval_passed``) but is reported separately -- though with the
+    unreachable-PASS stop such paths are absorbed as FAIL first, so that mass
+    is ~0. The three masses sum to 1.
     """
     passed = failed = 0.0
     live = {0: 1.0}  # k -> probability mass, all at the current n
     for n in range(max_trials + 1):
         nxt: dict[int, float] = {}
         for k, mass in live.items():
-            verdict = _verdict(k, n, target, pass_threshold=pass_threshold)
-            if n >= min_trials and verdict is Verdict.PASS:
+            outcome = _absorbing_outcome(
+                k, n, max_trials, target, pass_threshold, min_trials
+            )
+            if outcome is Verdict.PASS:
                 passed += mass
-            elif n >= min_trials and verdict is Verdict.FAIL:
+            elif outcome is Verdict.FAIL:
                 failed += mass
-            elif n == max_trials:
-                continue  # exhausted; accounted for below
             else:
-                nxt[k + 1] = nxt.get(k + 1, 0.0) + mass * theta
-                nxt[k] = nxt.get(k, 0.0) + mass * (1.0 - theta)
+                # At n == max_trials the next layer is never read, so mass
+                # still undetermined there is accounted for as `exhausted`.
+                _spread_mass(nxt, k, mass, theta)
         live = nxt
     exhausted = max(0.0, 1.0 - passed - failed)
     return passed, failed, exhausted

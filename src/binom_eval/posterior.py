@@ -158,6 +158,27 @@ def _verdict(
     return Verdict.UNDETERMINED
 
 
+def pass_unreachable(
+    passes: int,
+    trials: int,
+    remaining: int,
+    target: float,
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
+) -> bool:
+    """True when no continuation within ``remaining`` trials can lock PASS.
+
+    An all-pass continuation maximizes ``p_good``, so if even that best case
+    stays at or below ``pass_threshold`` the check can never PASS and the
+    verdict is already fixed (the eval fails), even though the posterior has
+    not yet dropped below the FAIL edge. Errored trials add no evidence to
+    ``(passes, trials)`` yet spend budget, so callers passing the full
+    remaining budget get a bound that can only be generous, never premature.
+    """
+    best = posterior_pass_prob(passes + remaining, trials + remaining, target)
+    return best <= pass_threshold
+
+
 def eval_passed(
     passes: int,
     trials: int,
