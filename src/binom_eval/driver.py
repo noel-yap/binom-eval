@@ -163,6 +163,59 @@ def _resolve_shortfall(
     return min(to_pass, to_fail)
 
 
+def _stop_batch(trials_run: int, min_trials: int, remaining: int) -> int:
+    """Batch size to use in place of "stop": 0, or enough to reach the floor.
+
+    A stop is postponed while fewer than `min_trials` trials have run.
+    """
+    if trials_run < min_trials:
+        return min(min_trials - trials_run, remaining)
+    return 0
+
+
+def _fail_is_fixed(
+    passes: int,
+    trials: int,
+    target: float,
+    remaining: int,
+    pass_threshold: float,
+) -> bool:
+    """True when this check alone fixes the eval as FAIL.
+
+    Either its posterior locked FAIL, or it cannot reach PASS within the
+    remaining budget. Every check must pass, so more trials only waste cost.
+    """
+    verdict = _verdict(passes, trials, target, pass_threshold=pass_threshold)
+    return verdict is Verdict.FAIL or pass_unreachable(
+        passes, trials, remaining, target, pass_threshold=pass_threshold
+    )
+
+
+def _passes_per_check(
+    graded: list[EvalRun], checks: list[Callable[[EvalRun], None]]
+) -> list[int]:
+    """Passing-trial count for each check over the graded (non-errored) runs."""
+    return [len(graded) - _check_failures(graded, check) for check in checks]
+
+
+def _undetermined_shortfalls(
+    passes_per_check: list[int],
+    trials: int,
+    target: float,
+    remaining: int,
+    pass_threshold: float,
+) -> list[int]:
+    """`_resolve_shortfall` for each check whose verdict is still undetermined."""
+    return [
+        _resolve_shortfall(
+            passes, trials, target, remaining, pass_threshold=pass_threshold
+        )
+        for passes in passes_per_check
+        if _verdict(passes, trials, target, pass_threshold=pass_threshold)
+        is Verdict.UNDETERMINED
+    ]
+
+
 def next_batch_size(
     runs: list[EvalRun],
     checks: list[Callable[[EvalRun], None]],
@@ -202,43 +255,23 @@ def next_batch_size(
     remaining = max_trials - len(runs)
     if remaining <= 0:
         return 0
-    # A "stop" (batch 0) is postponed while the min-trials floor is unmet:
-    # instead of stopping, run just enough trials to reach the floor.
-    if len(runs) < min_trials:
-        stop_batch = min(min_trials - len(runs), remaining)
-    else:
-        stop_batch = 0
+    stop_batch = _stop_batch(len(runs), min_trials, remaining)
     graded = graded_runs(runs)
     trials_done = len(graded)
-    shortfalls: list[int] = []
-    for check in checks:
-        passes = trials_done - _check_failures(graded, check)
-        verdict = _verdict(
-            passes, trials_done, target, pass_threshold=pass_threshold
+    passes_per_check = _passes_per_check(graded, checks)
+    if any(
+        _fail_is_fixed(
+            passes, trials_done, target, remaining, pass_threshold
         )
-        if verdict is Verdict.FAIL:
-            # Eval already fails; no batch can change that.
-            return stop_batch
-        if pass_unreachable(
-            passes, trials_done, remaining, target, pass_threshold=pass_threshold
-        ):
-            # Every check must pass, so one that cannot reach PASS within the
-            # budget fixes the eval as FAIL; more trials only waste cost.
-            return stop_batch
-        if verdict is Verdict.UNDETERMINED:
-            shortfalls.append(
-                _resolve_shortfall(
-                    passes,
-                    trials_done,
-                    target,
-                    remaining,
-                    pass_threshold=pass_threshold,
-                )
-            )
+        for passes in passes_per_check
+    ):
+        return stop_batch
+    shortfalls = _undetermined_shortfalls(
+        passes_per_check, trials_done, target, remaining, pass_threshold
+    )
     if not shortfalls:  # every check locked PASS (or there are no checks).
         return stop_batch
-    needed = max(shortfalls)
-    return min(needed, batch_max, remaining)
+    return min(max(shortfalls), batch_max, remaining)
 
 
 def run_eval_adaptive(
