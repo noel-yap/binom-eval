@@ -1,0 +1,19 @@
+tests/test_planning.py
+  s_9ed63694ca3add::t_7a2cf47a685cd9 213-216
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d783477bfe88d5da1ec97490bd2e97d1b80c1f08",
+  "prompts": {},
+  "sessions": {
+    "s_9ed63694ca3add": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e290a800-3237-4919-9e8a-f1f8071eecec",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Noel Yap <noel.yap+github.com@gmail.com>"
+    }
+  }
+}
